@@ -1,0 +1,453 @@
+{
+  "app_id": "whatsapp",
+  "package_name": "com.whatsapp",
+  "app_version": "2.26.27.85",
+  "acquisition_methods": [
+    "export",
+    "materialize"
+  ],
+  "targets": [
+    {
+      "target_id": "whatsapp.conversations",
+      "item_types": [
+        "conversation",
+        "message",
+        "conversation_collection"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data"
+      ],
+      "rules": {
+        "identification": {
+          "id": "whatsapp.parse_message_window",
+          "parameters": {
+            "counted_item_types": [
+              "conversation",
+              "message"
+            ],
+            "ui_criteria": {
+              "identity_basis": "chat_and_ordered_message_occurrence",
+              "merge": "adjacent_window_overlap"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "whatsapp.conversations.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "chat_history_exhausted",
+              "active_chat_list_exhausted"
+            ]
+          }
+        },
+        "result": {
+          "id": "whatsapp.conversations.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record",
+                "structured_json"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "whatsapp.conversations.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    },
+    {
+      "target_id": "whatsapp.attachments",
+      "item_types": [
+        "photo",
+        "video"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "saved_file"
+      ],
+      "rules": {
+        "identification": {
+          "id": "whatsapp.visible_media_occurrences",
+          "parameters": {
+            "counted_item_types": [
+              "photo",
+              "video"
+            ],
+            "ui_criteria": {
+              "kinds": [
+                "photo",
+                "video"
+              ],
+              "identity_basis": "chat_and_attachment_ref"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "whatsapp.attachments.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "chat_history_exhausted",
+              "active_chat_list_exhausted"
+            ]
+          }
+        },
+        "result": {
+          "id": "whatsapp.attachments.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record",
+                "structured_json"
+              ],
+              "saved_file": [
+                "saved_file",
+                "original_artifact",
+                "app_materialized_file"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "whatsapp.attachments.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    },
+    {
+      "target_id": "whatsapp.chat_export",
+      "item_types": [
+        "conversation_export"
+      ],
+      "method": "export",
+      "acquisition_environments": [
+        "device_only"
+      ],
+      "expected_artifacts": [
+        "export_file"
+      ],
+      "rules": {
+        "identification": {
+          "id": "whatsapp.chat_export_scope",
+          "parameters": {
+            "counted_item_types": [
+              "conversation_export"
+            ],
+            "ui_criteria": {
+              "identity_basis": "declared_chat_or_active_list_ordinal",
+              "delivery": "bluetooth",
+              "extension": ".zip"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "whatsapp.chat_export.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "export_target_identified",
+              "active_chat_list_exhausted"
+            ]
+          }
+        },
+        "result": {
+          "id": "whatsapp.chat_export.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "export_file": [
+                "export_file",
+                "original_artifact",
+                "app_export"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "whatsapp.chat_export.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    }
+  ],
+  "selectors": {
+    "whatsapp.chat-list": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.chat-list.resource-id",
+        "value": "android:id/list"
+      },
+      "constraints": {
+        "class_name": "androidx.recyclerview.widget.RecyclerView"
+      }
+    },
+    "whatsapp.chat-row": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.chat-row.resource-id",
+        "value": "com.whatsapp:id/contact_row_container"
+      },
+      "constraints": {
+        "clickable": true
+      }
+    },
+    "whatsapp.chat-name": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.chat-name.resource-id",
+        "value": "com.whatsapp:id/conversations_row_contact_name"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "whatsapp.chat-screen": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.chat-screen.resource-id",
+        "value": "com.whatsapp:id/conversation_contact_name"
+      },
+      "constraints": {}
+    },
+    "whatsapp.message-list": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.message-list.resource-id",
+        "value": "android:id/list"
+      },
+      "constraints": {
+        "class_name": "android.widget.ListView"
+      }
+    },
+    "whatsapp.message-text": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.message-text.resource-id",
+        "value": "com.whatsapp:id/message_text"
+      },
+      "constraints": {}
+    },
+    "whatsapp.message-time": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.message-time.resource-id",
+        "value": "com.whatsapp:id/date"
+      },
+      "constraints": {}
+    },
+    "whatsapp.message-status": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.message-status.resource-id",
+        "value": "com.whatsapp:id/status"
+      },
+      "constraints": {}
+    },
+    "whatsapp.date-divider": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.date-divider.resource-id",
+        "value": "com.whatsapp:id/conversation_row_date_divider"
+      },
+      "constraints": {}
+    },
+    "whatsapp.media-container": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.media-container.resource-id",
+        "value": "com.whatsapp:id/media_container"
+      },
+      "constraints": {
+        "clickable": true
+      }
+    },
+    "whatsapp.photo": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.photo.resource-id",
+        "value": "com.whatsapp:id/image"
+      },
+      "constraints": {}
+    },
+    "whatsapp.video": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.video.resource-id",
+        "value": "com.whatsapp:id/thumb"
+      },
+      "constraints": {
+        "clickable": true
+      }
+    },
+    "whatsapp.document-content": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.document-content.resource-id",
+        "value": "com.whatsapp:id/content"
+      },
+      "constraints": {
+        "clickable": true
+      }
+    },
+    "whatsapp.document-title": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.document-title.resource-id",
+        "value": "com.whatsapp:id/title"
+      },
+      "constraints": {}
+    },
+    "whatsapp.document-size": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.document-size.resource-id",
+        "value": "com.whatsapp:id/file_size"
+      },
+      "constraints": {}
+    },
+    "whatsapp.document-type": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.document-type.resource-id",
+        "value": "com.whatsapp:id/file_type"
+      },
+      "constraints": {}
+    },
+    "whatsapp.media-viewer": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.media-viewer.resource-id",
+        "value": "com.whatsapp:id/media_view_fragment_container"
+      },
+      "constraints": {}
+    },
+    "whatsapp.media-save": {
+      "selector": {
+        "kind": "content_description",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.media-save.content-description",
+        "value": "Save"
+      },
+      "constraints": {
+        "clickable": true
+      }
+    },
+    "whatsapp.media-controls": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.media-controls.resource-id",
+        "value": "com.whatsapp:id/controlView"
+      },
+      "constraints": {}
+    },
+    "whatsapp.scroll-bottom": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.scroll-bottom.resource-id",
+        "value": "com.whatsapp:id/scroll_bottom"
+      },
+      "constraints": {
+        "clickable": true
+      }
+    },
+    "whatsapp.more-options": {
+      "selector": {
+        "kind": "content_description",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.more-options.content-description",
+        "value": "More options"
+      },
+      "constraints": {
+        "clickable": true
+      }
+    },
+    "whatsapp.more": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.more.text",
+        "value": "More"
+      },
+      "constraints": {}
+    },
+    "whatsapp.export-chat": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.export-chat.text",
+        "value": "Export chat"
+      },
+      "constraints": {}
+    },
+    "whatsapp.include-media": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.whatsapp",
+        "selector_id": "whatsapp.include-media.text",
+        "value": "Include media"
+      },
+      "constraints": {}
+    }
+  },
+  "timings": {
+    "default_timeout": 5.0,
+    "poll_interval": 0.2,
+    "application_start_settle": 1.0,
+    "transition_settle": 0.5,
+    "share_target_wait": 1.0,
+    "inventory_probe_interval": 0.2,
+    "windows_receiver_timeout": 10.0,
+    "export_receipt_timeout": 90.0,
+    "export_receipt_poll_interval": 0.2
+  },
+  "parameters": {
+    "inventory_probes": 6,
+    "materialize_roots": {
+      "photo": [
+        "/sdcard/Pictures/WhatsApp"
+      ],
+      "video": [
+        "/sdcard/Movies/WhatsApp"
+      ]
+    }
+  }
+}

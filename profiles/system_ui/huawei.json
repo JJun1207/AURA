@@ -1,0 +1,91 @@
+{
+  "name": "huawei",
+  "description": "Known unverified Huawei EMUI System UI candidates. Runtime code must confirm the resulting state.",
+  "manufacturer_match": [
+    "huawei"
+  ],
+  "operations": {
+    "dnd": {
+      "strategy": "switch_basic",
+      "direct_intents": [
+        "am start -a android.settings.ZEN_MODE_SETTINGS",
+        "am start -a android.settings.ZEN_MODE_SETTINGS -f 0x10008000"
+      ],
+      "settings_route": [
+        {
+          "exact_labels": [
+            "Sounds"
+          ],
+          "contains_tokens": [
+            "Sound"
+          ],
+          "max_swipes": 5
+        },
+        {
+          "exact_labels": [
+            "Do not disturb"
+          ],
+          "contains_tokens": [
+            "disturb"
+          ],
+          "regex_patterns": [
+            "(?i)^do\\s+not\\s+disturb$"
+          ],
+          "max_swipes": 4
+        }
+      ],
+      "title_labels": [
+        "Do Not Disturb",
+        "Do not disturb"
+      ],
+      "title_resource_ids": [
+        "android:id/title"
+      ],
+      "main_switch_resource_ids": [
+        "android:id/switch_widget"
+      ],
+      "hide_notifications": {
+        "required": false
+      }
+    },
+    "airplane": {
+      "strategy": "adb_shell_candidates",
+      "state_command": "cmd connectivity airplane-mode",
+      "enabled_value": "enabled",
+      "disabled_value": "disabled",
+      "enable_commands": [
+        "cmd connectivity airplane-mode enable"
+      ],
+      "disable_commands": [
+        "cmd connectivity airplane-mode disable"
+      ]
+    },
+    "network": {
+      "wifi": {
+        "strategy": "adb_shell_candidates",
+        "enable_commands": [
+          "svc wifi enable",
+          "cmd wifi set-wifi-enabled enabled",
+          "settings put global wifi_on 1"
+        ],
+        "disable_commands": [
+          "svc wifi disable",
+          "cmd wifi set-wifi-enabled disabled",
+          "settings put global wifi_on 0"
+        ]
+      }
+    },
+    "recent_apps": {
+      "strategy": "close_all_button",
+      "settle_sec": 0.5,
+      "close_all_resource_ids": [
+        "com.huawei.android.launcher:id/clear_all_recents_image_button"
+      ],
+      "close_all_descriptions": [
+        "Close all recent apps"
+      ],
+      "post_click_settle_sec": 0.5,
+      "press_home_after_click": true
+    }
+  }
+}

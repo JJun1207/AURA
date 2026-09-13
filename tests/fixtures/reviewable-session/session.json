@@ -1,0 +1,27 @@
+{
+  "device_session_id": "session-fixture",
+  "status": "complete",
+  "execution_plan": [
+    {
+      "app_id": "example",
+      "method": "materialize",
+      "order": 1,
+      "phase": "local-first",
+      "run_id": "run-001",
+      "status": "complete"
+    }
+  ],
+  "executions": [
+    {
+      "app_id": "example",
+      "archive_path": "run-001.zip",
+      "archive_size": 0,
+      "method": "materialize",
+      "order": 1,
+      "phase": "local-first",
+      "run_id": "run-001",
+      "sha256": "",
+      "status": "complete"
+    }
+  ]
+}

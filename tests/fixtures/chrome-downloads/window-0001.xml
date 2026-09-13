@@ -1,0 +1,21 @@
+<hierarchy>
+  <node resource-id="com.android.chrome:id/date" text="Today - 1 Sept 2026" />
+  <node clickable="true">
+    <node text="" resource-id="com.android.chrome:id/thumbnail" content-desc="" />
+    <node text="AURA-EVAL-08-audio.wav" resource-id="com.android.chrome:id/title" content-desc="" />
+    <node text="16.04 kB • 127.0.0.1:8765" resource-id="com.android.chrome:id/caption" content-desc="" />
+  </node>
+  <node clickable="true">
+    <node text="" resource-id="com.android.chrome:id/thumbnail" content-desc="AURA-EVAL-07-image.png" />
+  </node>
+  <node clickable="true">
+    <node text="" resource-id="com.android.chrome:id/thumbnail" content-desc="" />
+    <node text="AURA-EVAL-06-contact.vcf" resource-id="com.android.chrome:id/title" content-desc="" />
+    <node text="148 B • 127.0.0.1:8765" resource-id="com.android.chrome:id/caption" content-desc="" />
+  </node>
+  <node clickable="true">
+    <node text="" resource-id="com.android.chrome:id/thumbnail" content-desc="" />
+    <node text="AURA-EVAL-05-events.log.txt" resource-id="com.android.chrome:id/title" content-desc="" />
+    <node text="247 B • 127.0.0.1:8765" resource-id="com.android.chrome:id/caption" content-desc="" />
+  </node>
+</hierarchy>

@@ -1,0 +1,455 @@
+{
+  "app_id": "notesnook",
+  "package_name": "com.streetwriters.notesnook",
+  "app_version": "3.4.5",
+  "acquisition_methods": [
+    "materialize",
+    "export"
+  ],
+  "targets": [
+    {
+      "target_id": "notesnook.notes",
+      "item_types": [
+        "account",
+        "note",
+        "revision",
+        "trash_item"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data"
+      ],
+      "rules": {
+        "identification": {
+          "id": "notesnook.note_revision_and_trash_cards",
+          "parameters": {
+            "counted_item_types": [
+              "account",
+              "note",
+              "revision",
+              "trash_item"
+            ],
+            "ui_criteria": {
+              "identity_fields": [
+                "note_ref",
+                "version_ref",
+                "trash_ref"
+              ],
+              "workspace_gate": "authenticated_for_materialize"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "notesnook.notes.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "notes_and_trash_exhausted"
+            ]
+          }
+        },
+        "result": {
+          "id": "notesnook.notes.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "notesnook.notes.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    },
+    {
+      "target_id": "notesnook.attachments",
+      "item_types": [
+        "attachment"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "downloaded_file"
+      ],
+      "rules": {
+        "identification": {
+          "id": "notesnook.attachment_rows",
+          "parameters": {
+            "counted_item_types": [
+              "attachment"
+            ],
+            "ui_criteria": {
+              "identity_fields": [
+                "kind_label",
+                "filename",
+                "displayed_size"
+              ],
+              "parent_scope": "note_ref"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "notesnook.attachments.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "notes_and_trash_exhausted"
+            ]
+          }
+        },
+        "result": {
+          "id": "notesnook.attachments.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "downloaded_file": [
+                "downloaded_file",
+                "original_artifact",
+                "app_materialized_file"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "notesnook.attachments.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    },
+    {
+      "target_id": "notesnook.export",
+      "item_types": [
+        "note_export"
+      ],
+      "method": "export",
+      "acquisition_environments": [
+        "device_only"
+      ],
+      "expected_artifacts": [
+        "export_file"
+      ],
+      "rules": {
+        "identification": {
+          "id": "notesnook.whole_container_selection",
+          "parameters": {
+            "counted_item_types": [
+              "note_export"
+            ],
+            "ui_criteria": {
+              "minimum_initial_selected": 1,
+              "selection_condition": "select_all_increases_count",
+              "extension": ".zip"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "notesnook.export.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "export_selection_verified"
+            ]
+          }
+        },
+        "result": {
+          "id": "notesnook.export.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "export_file": [
+                "export_file",
+                "original_artifact",
+                "app_export"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "notesnook.export.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    }
+  ],
+  "selectors": {
+    "notesnook.workspace.header": {
+      "selector": {
+        "kind": "content_description",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.workspace.header.content-description",
+        "value": "Search in Notes"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true
+      }
+    },
+    "notesnook.workspace.logged-out": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.workspace.logged-out.text",
+        "value": "You are not logged in"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "notesnook.notes-list": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.notes-list.resource-id",
+        "value": "list.id"
+      },
+      "constraints": {
+        "class_name": "android.widget.ScrollView",
+        "scrollable": true
+      }
+    },
+    "notesnook.note-menu": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.note-menu.resource-id",
+        "value": "listitem.menu"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.side-menu.open": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.side-menu.open.resource-id",
+        "value": "left"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.side-menu.settings": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.side-menu.settings.resource-id",
+        "value": "sidemenu-settings-icon"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.side-menu.notes": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.side-menu.notes.resource-id",
+        "value": "Notes"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.side-menu.trash": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.side-menu.trash.resource-id",
+        "value": "Trash"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.account.sync-now": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.account.sync-now.text",
+        "value": "Sync now"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "notesnook.history.open": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.history.open.resource-id",
+        "value": "icon-history"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.attachments.open": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.attachments.open.resource-id",
+        "value": "icon-attachments"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.trash.header": {
+      "selector": {
+        "kind": "content_description",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.trash.header.content-description",
+        "value": "Search in Trash"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.selection.header": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.selection.header.resource-id",
+        "value": "search-header"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.selection.export": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.selection.export.resource-id",
+        "value": "select-export"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.export.markdown-frontmatter": {
+      "selector": {
+        "kind": "content_description",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.export.markdown-frontmatter.content-description",
+        "value": ".., Markdown + Frontmatter"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "documentsui.download-root": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.google.android.documentsui",
+        "selector_id": "documentsui.download-root.text",
+        "value": "Download"
+      },
+      "constraints": {
+        "clickable": true
+      }
+    },
+    "documentsui.aura-directory": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.google.android.documentsui",
+        "selector_id": "documentsui.aura-directory.text",
+        "value": "AURA"
+      },
+      "constraints": {
+        "clickable": true
+      }
+    },
+    "documentsui.current-aura": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.google.android.documentsui",
+        "selector_id": "documentsui.current-aura.resource-id",
+        "value": "com.google.android.documentsui:id/header_title"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView",
+        "text": "Files in AURA"
+      }
+    },
+    "documentsui.use-folder": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.google.android.documentsui",
+        "selector_id": "documentsui.use-folder.resource-id",
+        "value": "android:id/button1"
+      },
+      "constraints": {
+        "class_name": "android.widget.Button",
+        "clickable": true
+      }
+    },
+    "documentsui.confirm-folder": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.google.android.documentsui",
+        "selector_id": "documentsui.confirm-folder.resource-id",
+        "value": "android:id/button1"
+      },
+      "constraints": {
+        "class_name": "android.widget.Button",
+        "clickable": true
+      }
+    }
+  },
+  "timings": {
+    "default_timeout": 5.0,
+    "poll_interval": 0.2,
+    "application_start_settle": 1.0,
+    "transition_settle": 0.5,
+    "application_return_settle": 1.0,
+    "inventory_probe_interval": 0.25
+  },
+  "parameters": {
+    "inventory_probes": 20,
+    "export_root": "/sdcard/Download/AURA"
+  }
+}

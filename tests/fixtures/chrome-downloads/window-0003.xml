@@ -1,0 +1,40 @@
+<hierarchy>
+  <node clickable="true">
+    <node text="" resource-id="com.android.chrome:id/thumbnail" content-desc="AURA-EVAL-07-image.png" />
+  </node>
+  <node clickable="true">
+    <node text="" resource-id="com.android.chrome:id/thumbnail" content-desc="" />
+    <node text="AURA-EVAL-06-contact.vcf" resource-id="com.android.chrome:id/title" content-desc="" />
+    <node text="148 B • 127.0.0.1:8765" resource-id="com.android.chrome:id/caption" content-desc="" />
+  </node>
+  <node clickable="true">
+    <node text="" resource-id="com.android.chrome:id/thumbnail" content-desc="" />
+    <node text="AURA-EVAL-05-events.log.txt" resource-id="com.android.chrome:id/title" content-desc="" />
+    <node text="247 B • 127.0.0.1:8765" resource-id="com.android.chrome:id/caption" content-desc="" />
+  </node>
+  <node clickable="true">
+    <node text="" resource-id="com.android.chrome:id/thumbnail" content-desc="" />
+    <node text="AURA-EVAL-04-notes.md" resource-id="com.android.chrome:id/title" content-desc="" />
+    <node text="254 B • 127.0.0.1:8765" resource-id="com.android.chrome:id/caption" content-desc="" />
+  </node>
+  <node clickable="true">
+    <node text="" resource-id="com.android.chrome:id/thumbnail" content-desc="" />
+    <node text="AURA-EVAL-03-metadata.json" resource-id="com.android.chrome:id/title" content-desc="" />
+    <node text="154 B • 127.0.0.1:8765" resource-id="com.android.chrome:id/caption" content-desc="" />
+  </node>
+  <node clickable="true">
+    <node text="" resource-id="com.android.chrome:id/thumbnail" content-desc="" />
+    <node text="AURA-EVAL-02-timeline.csv" resource-id="com.android.chrome:id/title" content-desc="" />
+    <node text="212 B • 127.0.0.1:8765" resource-id="com.android.chrome:id/caption" content-desc="" />
+  </node>
+  <node clickable="true">
+    <node text="" resource-id="com.android.chrome:id/thumbnail" content-desc="" />
+    <node text="AURA-EVAL-01-overview.txt" resource-id="com.android.chrome:id/title" content-desc="" />
+    <node text="145 B • 127.0.0.1:8765" resource-id="com.android.chrome:id/caption" content-desc="" />
+  </node>
+  <node resource-id="com.android.chrome:id/date" text="22 Nov 2025" />
+  <node clickable="true">
+    <node text="" resource-id="com.android.chrome:id/thumbnail" content-desc="" />
+    <node text="FiddlerRoot.cer (1).crt" resource-id="com.android.chrome:id/title" content-desc="" />
+  </node>
+</hierarchy>

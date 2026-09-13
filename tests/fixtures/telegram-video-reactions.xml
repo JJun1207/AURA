@@ -1,0 +1,14 @@
+<captures>
+  <!-- Reduced video row for reactions-suffix regression testing. -->
+  <capture id="old-source135">
+<node index="3" text="Video, 1 minute 58 seconds&#10;동영상 봐주세요&#10;Received at 9:14 PM&#10;" resource-id="" class="android.view.ViewGroup" package="org.telegram.messenger" content-desc="" checkable="false" checked="false" clickable="false" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" visible-to-user="true" bounds="[0,679][1080,1213]" drawing-order="5" hint="" display-id="0" />
+  </capture>
+  <!-- Reduced video row for reactions-suffix regression testing. -->
+  <capture id="new-source135">
+<node index="3" text="Video, 1 minute 58 seconds&#10;동영상 봐주세요&#10;Received at 9:14 PMReactions: &#10;&#10;" resource-id="" class="android.view.ViewGroup" package="org.telegram.messenger" content-desc="" checkable="false" checked="false" clickable="false" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" visible-to-user="true" bounds="[0,679][1080,1213]" drawing-order="5" hint="" display-id="0" />
+  </capture>
+  <!-- Reduced video row for reactions-suffix regression testing. -->
+  <capture id="new-source138">
+<node index="3" text="Video, 1 minute 58 seconds&#10;동영상 봐주세요&#10;Received at 9:14 PMReactions: &#10;&#10;" resource-id="" class="android.view.ViewGroup" package="org.telegram.messenger" content-desc="" checkable="false" checked="false" clickable="false" enabled="true" focusable="true" focused="false" scrollable="false" long-clickable="false" password="false" selected="false" visible-to-user="true" bounds="[0,1234][1080,1768]" drawing-order="5" hint="" display-id="0" />
+  </capture>
+</captures>

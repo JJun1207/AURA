@@ -1,0 +1,480 @@
+{
+  "app_id": "telegram",
+  "package_name": "org.telegram.messenger",
+  "app_version": "12.9.0",
+  "acquisition_methods": [
+    "materialize"
+  ],
+  "targets": [
+    {
+      "target_id": "telegram.account",
+      "item_types": [
+        "account",
+        "account_summary"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data"
+      ],
+      "rules": {
+        "identification": {
+          "id": "telegram.parse_account_profile",
+          "parameters": {
+            "counted_item_types": [
+              "account"
+            ],
+            "ui_criteria": {
+              "identity_basis": "visible_account_profile",
+              "entry_selector": "telegram.navigation.profile"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "telegram.account.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "account_profile_verified"
+            ]
+          }
+        },
+        "result": {
+          "id": "telegram.account.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "telegram.account.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    },
+    {
+      "target_id": "telegram.conversations",
+      "item_types": [
+        "conversation",
+        "message"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data"
+      ],
+      "rules": {
+        "identification": {
+          "id": "telegram.logical_chatroom_and_message_occurrences",
+          "parameters": {
+            "counted_item_types": [
+              "conversation",
+              "message"
+            ],
+            "ui_criteria": {
+              "chat_identity": "canonical_account_and_container_metadata",
+              "message_identity": "ordered_occurrence_and_window_overlap",
+              "stagnation_parameter": "stagnation_rounds"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "telegram.conversations.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "chat_list_and_histories_exhausted"
+            ]
+          }
+        },
+        "result": {
+          "id": "telegram.conversations.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "telegram.conversations.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    },
+    {
+      "target_id": "telegram.attachments",
+      "item_types": [
+        "photo",
+        "video",
+        "file"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "downloaded_file"
+      ],
+      "rules": {
+        "identification": {
+          "id": "telegram.rendered_attachment_occurrences",
+          "parameters": {
+            "counted_item_types": [
+              "photo",
+              "video",
+              "file"
+            ],
+            "ui_criteria": {
+              "kinds": [
+                "photo",
+                "video",
+                "file"
+              ],
+              "identity_basis": "chatroom_message_occurrence",
+              "inventory_parameter": "inventory_probes"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "telegram.attachments.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "chat_list_and_histories_exhausted"
+            ]
+          }
+        },
+        "result": {
+          "id": "telegram.attachments.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "downloaded_file": [
+                "downloaded_file",
+                "original_artifact",
+                "app_materialized_file"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "telegram.attachments.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {
+              "display_fallback": {
+                "conditions": [
+                  "save_action_unavailable"
+                ],
+                "required_artifacts": [
+                  "ui_record",
+                  "screen_image",
+                  "ui_hierarchy",
+                  "audit_record"
+                ],
+                "acquisition_status": "partial"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "selectors": {
+    "telegram.list.top.title": {
+      "selector": {"kind": "text", "owner_package": "org.telegram.messenger", "value": "Telegram"},
+      "constraints": {"class_name": "android.widget.TextView"}
+    },
+    "telegram.list.top.waiting": {
+      "selector": {"kind": "text", "owner_package": "org.telegram.messenger", "value": "Waiting for network"},
+      "constraints": {"class_name": "android.widget.TextView"}
+    },
+    "telegram.list.top.waiting-ellipsis": {
+      "selector": {"kind": "text", "owner_package": "org.telegram.messenger", "value": "Waiting for network..."},
+      "constraints": {"class_name": "android.widget.TextView"}
+    },
+    "telegram.list.top.connecting": {
+      "selector": {"kind": "text", "owner_package": "org.telegram.messenger", "value": "Connecting..."},
+      "constraints": {"class_name": "android.widget.TextView"}
+    },
+    "telegram.list": {
+      "selector": {
+        "kind": "class_name",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.list.class-name",
+        "value": "androidx.recyclerview.widget.RecyclerView"
+      },
+      "constraints": {}
+    },
+    "telegram.list.end.contacts": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.list.end.contacts.text",
+        "value": "Your contacts on Telegram"
+      },
+      "constraints": {}
+    },
+    "telegram.navigation.back": {
+      "selector": {
+        "kind": "content_description",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.navigation.back.content-description",
+        "value": "Go back"
+      },
+      "constraints": {
+        "class_name": "android.widget.ImageView",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "telegram.navigation.chats": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.navigation.chats.text",
+        "value": "Chats"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "telegram.navigation.profile": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.navigation.profile.text",
+        "value": "Profile"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "telegram.account.edit-info": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.account.edit-info.text",
+        "value": "Edit Info"
+      },
+      "constraints": {
+        "class_name": "android.widget.Button",
+        "clickable": true
+      }
+    },
+    "telegram.account.qr-code": {
+      "selector": {
+        "kind": "content_description",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.account.qr-code.content-description",
+        "value": "QR Code"
+      },
+      "constraints": {
+        "class_name": "android.widget.ImageView"
+      }
+    },
+    "telegram.message.composer": {
+      "selector": {
+        "kind": "class_name",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.message.composer.class-name",
+        "value": "android.widget.FrameLayout"
+      },
+      "constraints": {}
+    },
+    "telegram.message.text-row": {
+      "selector": {
+        "kind": "class_name",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.message.text-row.class-name",
+        "value": "android.view.ViewGroup"
+      },
+      "constraints": {
+        "clickable": false,
+        "focusable": true
+      }
+    },
+    "telegram.message.info-header": {
+      "selector": {
+        "kind": "class_name",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.message.info-header.class-name",
+        "value": "android.widget.FrameLayout"
+      },
+      "constraints": {
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "telegram.message.go-to-bottom": {
+      "selector": {
+        "kind": "content_description",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.message.go-to-bottom.content-description",
+        "value": "Go to bottom"
+      },
+      "constraints": {
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "telegram.info.action.add-members": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.info.action.add-members.text",
+        "value": "Add Members"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "telegram.info.action.call": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.info.action.call.text",
+        "value": "Call"
+      },
+      "constraints": {
+        "class_name": "android.widget.Button",
+        "clickable": true
+      }
+    },
+    "telegram.info.action.channel-settings": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.info.action.channel-settings.text",
+        "value": "Channel Settings"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "telegram.info.field.mobile": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.info.field.mobile.text",
+        "value": "Mobile"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "telegram.info.label.subscribers": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.info.label.subscribers.text",
+        "value": "Subscribers"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "telegram.info.list": {
+      "selector": {
+        "kind": "class_name",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.info.list.class-name",
+        "value": "androidx.recyclerview.widget.RecyclerView"
+      },
+      "constraints": {}
+    },
+    "telegram.info.type.private-channel": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.info.type.private-channel.text",
+        "value": "private channel"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "telegram.info.type.public-channel": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.info.type.public-channel.text",
+        "value": "public channel"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "telegram.text": {
+      "selector": {
+        "kind": "class_name",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.text.class-name",
+        "value": "android.widget.TextView"
+      },
+      "constraints": {}
+    },
+    "telegram.attachment.save-to-downloads": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.attachment.save-to-downloads.text",
+        "value": "Save to Downloads"
+      },
+      "constraints": {}
+    },
+    "telegram.attachment.save-to-gallery": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.attachment.save-to-gallery.text",
+        "value": "Save to Gallery"
+      },
+      "constraints": {}
+    }
+  },
+  "timings": {
+    "default_timeout": 5.0,
+    "poll_interval": 0.2,
+    "application_start_settle": 1.0,
+    "inventory_probe_interval": 0.25
+  },
+  "parameters": {
+    "stagnation_rounds": 2,
+    "inventory_probes": 20,
+    "attachment_roots": {
+      "file": [
+        "/sdcard/Download",
+        "/sdcard/Download/Telegram"
+      ],
+      "photo": [
+        "/sdcard/Pictures/Telegram"
+      ],
+      "video": [
+        "/sdcard/Movies/Telegram",
+        "/sdcard/Pictures/Telegram"
+      ]
+    }
+  }
+}

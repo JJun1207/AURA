@@ -1,0 +1,359 @@
+{
+  "app_id": "samsung_browser",
+  "package_name": "com.sec.android.app.sbrowser",
+  "app_version": "30.0.0.67",
+  "acquisition_methods": [
+    "materialize"
+  ],
+  "targets": [
+    {
+      "target_id": "samsung_browser.history",
+      "item_types": [
+        "history_collection",
+        "history_entry"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "ui_observation"
+      ],
+      "rules": {
+        "identification": {
+          "id": "samsung_browser.parse_history",
+          "parameters": {
+            "counted_item_types": [
+              "history_entry"
+            ],
+            "ui_criteria": {
+              "row_resource_id": "history_relative",
+              "required_child_resource_id": "history_title",
+              "identity_fields": [
+                "title",
+                "displayed_address",
+                "displayed_time"
+              ]
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "samsung_browser.history.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "repeated_hierarchy"
+            ]
+          }
+        },
+        "result": {
+          "id": "samsung_browser.history.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "ui_observation": [
+                "screen_image",
+                "ui_hierarchy"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "samsung_browser.history.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    },
+    {
+      "target_id": "samsung_browser.downloads",
+      "item_types": [
+        "download_collection",
+        "download_entry"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "ui_observation"
+      ],
+      "rules": {
+        "identification": {
+          "id": "samsung_browser.parse_downloads",
+          "parameters": {
+            "counted_item_types": [
+              "download_entry"
+            ],
+            "ui_criteria": {
+              "row_resource_id": "download_item_parent",
+              "required_child_resource_id": "download_item_title"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "samsung_browser.downloads.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "repeated_hierarchy"
+            ]
+          }
+        },
+        "result": {
+          "id": "samsung_browser.downloads.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "ui_observation": [
+                "screen_image",
+                "ui_hierarchy"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "samsung_browser.downloads.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    },
+    {
+      "target_id": "samsung_browser.saved_pages",
+      "item_types": [
+        "saved_page_collection",
+        "saved_page_entry"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "ui_observation"
+      ],
+      "rules": {
+        "identification": {
+          "id": "samsung_browser.parse_saved_pages",
+          "parameters": {
+            "counted_item_types": [
+              "saved_page_entry"
+            ],
+            "ui_criteria": {
+              "row_resource_id": "saved_page_list_view_layout",
+              "required_child_resource_id": "saved_page_list_view_title_text_view"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "samsung_browser.saved_pages.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "repeated_hierarchy"
+            ]
+          }
+        },
+        "result": {
+          "id": "samsung_browser.saved_pages.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "ui_observation": [
+                "screen_image",
+                "ui_hierarchy"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "samsung_browser.saved_pages.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    },
+    {
+      "target_id": "samsung_browser.bookmarks",
+      "item_types": [
+        "bookmark_collection",
+        "bookmark_entry"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "ui_observation"
+      ],
+      "rules": {
+        "identification": {
+          "id": "samsung_browser.parse_bookmarks",
+          "parameters": {
+            "counted_item_types": [
+              "bookmark_entry"
+            ],
+            "ui_criteria": {
+              "row_resource_id": "displayed_view",
+              "required_child_resource_id": "bookmark_folder_title"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "samsung_browser.bookmarks.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "repeated_hierarchy"
+            ]
+          }
+        },
+        "result": {
+          "id": "samsung_browser.bookmarks.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "ui_observation": [
+                "screen_image",
+                "ui_hierarchy"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "samsung_browser.bookmarks.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    }
+  ],
+  "selectors": {
+    "samsung_browser.main": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.main.resource-id",
+        "value": "com.sec.android.app.sbrowser:id/action_more"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.menu": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.menu.resource-id",
+        "value": "com.sec.android.app.sbrowser:id/action_more"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.menu.list": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.menu.list.resource-id",
+        "value": "com.sec.android.app.sbrowser:id/tools_recycler_view"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.menu.history": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.menu.history.text",
+        "value": "History"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.menu.downloads": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.menu.downloads.text",
+        "value": "Downloads"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.menu.saved-pages": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.menu.saved-pages.text",
+        "value": "Saved pages"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.bookmarks": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.bookmarks.resource-id",
+        "value": "com.sec.android.app.sbrowser:id/action_bookmarks"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.screen.history": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.screen.history.resource-id",
+        "value": "com.sec.android.app.sbrowser:id/history_container"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.screen.downloads": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.screen.downloads.resource-id",
+        "value": "com.sec.android.app.sbrowser:id/download_history_main_content"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.screen.saved-pages": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.screen.saved-pages.resource-id",
+        "value": "com.sec.android.app.sbrowser:id/saved_page_view_main_layout"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.screen.bookmarks": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.screen.bookmarks.resource-id",
+        "value": "com.sec.android.app.sbrowser:id/bookmark_screen_root"
+      },
+      "constraints": {}
+    }
+  },
+  "timings": {
+    "default_timeout": 5.0,
+    "poll_interval": 0.2,
+    "transition_settle": 0.4,
+    "application_start_settle": 0.8
+  },
+  "parameters": {}
+}

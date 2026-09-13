@@ -1,0 +1,288 @@
+{
+  "app_id": "notion",
+  "package_name": "notion.id",
+  "app_version": "0.6.4030",
+  "acquisition_methods": [
+    "materialize",
+    "export"
+  ],
+  "targets": [
+    {
+      "target_id": "notion.content",
+      "item_types": [
+        "account",
+        "account_collection",
+        "workspace",
+        "page",
+        "database_item"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data"
+      ],
+      "rules": {
+        "identification": {
+          "id": "notion.workspace_page_and_database_identity",
+          "parameters": {
+            "counted_item_types": [
+              "account",
+              "workspace",
+              "page",
+              "database_item"
+            ],
+            "ui_criteria": {
+              "identity_fields": [
+                "workspace_ref",
+                "page_ref",
+                "database_item_ref"
+              ],
+              "members_scope": "selected_workspace"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "notion.content.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "all_workspaces_visited"
+            ]
+          }
+        },
+        "result": {
+          "id": "notion.content.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "notion.content.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    },
+    {
+      "target_id": "notion.attachments",
+      "item_types": [
+        "attachment"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "downloaded_file"
+      ],
+      "rules": {
+        "identification": {
+          "id": "notion.parse_page_candidates",
+          "parameters": {
+            "counted_item_types": [
+              "attachment"
+            ],
+            "ui_criteria": {
+              "identity_basis": "parent_page_and_attachment_ref",
+              "external_urls": "out_of_scope"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "notion.attachments.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "all_workspaces_visited"
+            ]
+          }
+        },
+        "result": {
+          "id": "notion.attachments.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "downloaded_file": [
+                "downloaded_file",
+                "original_artifact",
+                "app_materialized_file"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "notion.attachments.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    },
+    {
+      "target_id": "notion.export",
+      "item_types": [
+        "page_export",
+        "database_export"
+      ],
+      "method": "export",
+      "acquisition_environments": [
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "export_file"
+      ],
+      "rules": {
+        "identification": {
+          "id": "notion.top_level_export_scope",
+          "parameters": {
+            "counted_item_types": [
+              "page_export",
+              "database_export"
+            ],
+            "ui_criteria": {
+              "classification": [
+                "general",
+                "database"
+              ],
+              "format": "Markdown & CSV",
+              "include_subpages": true
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "notion.export.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "all_workspaces_visited"
+            ]
+          }
+        },
+        "result": {
+          "id": "notion.export.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "export_file": [
+                "export_file",
+                "original_artifact",
+                "app_export"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "notion.export.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    }
+  ],
+  "selectors": {
+    "notion.home": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "notion.id",
+        "selector_id": "notion.home.resource-id",
+        "value": "vision_tab_Home"
+      },
+      "constraints": {
+        "class_name": "android.view.View",
+        "selected": true
+      }
+    },
+    "notion.workspace-menu.open": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "notion.id",
+        "selector_id": "notion.workspace-menu.open.resource-id",
+        "value": "vision_workspace_icon"
+      },
+      "constraints": {
+        "class_name": "android.view.View",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notion.workspace-menu.switch": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "notion.id",
+        "selector_id": "notion.workspace-menu.switch.resource-id",
+        "value": "home-tab.more.switch-workspace"
+      },
+      "constraints": {
+        "class_name": "android.view.View",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notion.workspace-menu.members": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "notion.id",
+        "selector_id": "notion.workspace-menu.members.resource-id",
+        "value": "home-tab.more.members"
+      },
+      "constraints": {
+        "class_name": "android.view.View",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notion.account-switcher": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "notion.id",
+        "selector_id": "notion.account-switcher.text",
+        "value": "Accounts"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "notion.members": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "notion.id",
+        "selector_id": "notion.members.text",
+        "value": "Members"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    }
+  },
+  "timings": {
+    "default_timeout": 5.0,
+    "poll_interval": 0.2,
+    "transition_settle": 0.8,
+    "application_start_settle": 1.0,
+    "inventory_probe_interval": 0.25
+  },
+  "parameters": {
+    "export_root": "/sdcard/Download/Notion",
+    "attachment_roots": [
+      "/sdcard/Download/Notion",
+      "/sdcard/Pictures/Notion",
+      "/sdcard/Movies/Notion",
+      "/sdcard/Music/Notion"
+    ],
+    "inventory_probes": 20
+  }
+}

@@ -1,0 +1,120 @@
+{
+  "name": "samsung",
+  "description": "Known Samsung System UI candidates. Runtime code must confirm the resulting state.",
+  "manufacturer_match": [
+    "samsung"
+  ],
+  "operations": {
+    "dnd": {
+      "strategy": "switch_with_hide_all",
+      "direct_intents": [
+        "am start -a android.settings.ZEN_MODE_SETTINGS",
+        "am start -a android.settings.ZEN_MODE_SETTINGS -f 0x10008000"
+      ],
+      "title_labels": [
+        "Do Not Disturb",
+        "Do not disturb",
+        "Turn on now"
+      ],
+      "main_switch_resource_ids": [
+        "android:id/switch_widget"
+      ],
+      "hide_notifications": {
+        "required": true,
+        "row_labels": [
+          "Hide notifications"
+        ],
+        "hide_all_labels": [
+          "Hide all"
+        ],
+        "click_resource_suffix": "switch_text",
+        "state_resource_suffix": "switch_widget"
+      }
+    },
+    "airplane": {
+      "strategy": "adb_shell_candidates",
+      "state_command": "cmd connectivity airplane-mode",
+      "enabled_value": "enabled",
+      "disabled_value": "disabled",
+      "enable_commands": [
+        "cmd connectivity airplane-mode enable"
+      ],
+      "disable_commands": [
+        "cmd connectivity airplane-mode disable"
+      ]
+    },
+    "network": {
+      "wifi": {
+        "strategy": "adb_shell_candidates",
+        "enable_commands": [
+          "svc wifi enable",
+          "cmd wifi set-wifi-enabled enabled",
+          "settings put global wifi_on 1"
+        ],
+        "disable_commands": [
+          "svc wifi disable",
+          "cmd wifi set-wifi-enabled disabled",
+          "settings put global wifi_on 0"
+        ]
+      }
+    },
+    "recent_apps": {
+      "strategy": "close_all_button",
+      "settle_sec": 0.5,
+      "close_all_labels": [
+        "Close all"
+      ]
+    },
+    "bluetooth": {
+      "strategy": "adb_shell",
+      "state_command": "settings get global bluetooth_on",
+      "enabled_value": "1",
+      "disabled_value": "0",
+      "enable_command": "cmd bluetooth_manager enable",
+      "disable_command": "cmd bluetooth_manager disable",
+      "paired_devices_command": "dumpsys bluetooth_manager",
+      "ui_fallback": {
+        "direct_intents": [
+          "am start -a android.settings.WIRELESS_SETTINGS"
+        ],
+        "row_labels": [
+          "Bluetooth"
+        ],
+        "switch_resource_ids": [
+          "android:id/switch_widget"
+        ]
+      }
+    },
+    "share_sheet": {
+      "strategy": "visible_then_expand",
+      "owner_packages": [
+        "android",
+        "com.android.intentresolver"
+      ],
+      "resource_ids": [
+        "com.android.intentresolver:id/text1",
+        "android:id/text1"
+      ],
+      "bluetooth_labels": [
+        "Bluetooth"
+      ],
+      "fallback": {
+        "swipe_direction": "right",
+        "more_labels": [
+          "More"
+        ]
+      },
+      "receiver_picker": {
+        "owner_packages": [
+          "com.android.settings"
+        ],
+        "title_labels": [
+          "Select device"
+        ],
+        "receiver_resource_ids": [
+          "android:id/title"
+        ]
+      }
+    }
+  }
+}

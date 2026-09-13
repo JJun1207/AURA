@@ -1,0 +1,472 @@
+{
+  "app_id": "chrome",
+  "package_name": "com.android.chrome",
+  "android_versions": {
+    "min": 10
+  },
+  "app_version": "150.0.7871.124",
+  "acquisition_methods": [
+    "materialize"
+  ],
+  "targets": [
+    {
+      "target_id": "chrome.account",
+      "item_types": [
+        "account_context",
+        "account_entry"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "ui_observation"
+      ],
+      "rules": {
+        "identification": {
+          "id": "chrome.parse_account",
+          "parameters": {
+            "counted_item_types": [
+              "account_entry"
+            ],
+            "ui_criteria": {
+              "row_resource_id": "account_management_account_row",
+              "fields": [
+                "android:id/title",
+                "android:id/summary"
+              ]
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "chrome.account.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "single_screen_parsed"
+            ]
+          }
+        },
+        "result": {
+          "id": "chrome.account.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "ui_observation": [
+                "screen_image",
+                "ui_hierarchy"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "chrome.account.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    },
+    {
+      "target_id": "chrome.history",
+      "item_types": [
+        "history_collection",
+        "history_entry"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "ui_observation"
+      ],
+      "rules": {
+        "identification": {
+          "id": "chrome.parse_history",
+          "parameters": {
+            "counted_item_types": [
+              "history_entry"
+            ],
+            "ui_criteria": {
+              "row_clickable": true,
+              "required_child_resource_ids": [
+                "title",
+                "description"
+              ],
+              "date_marker": "unlabelled_text"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "chrome.history.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "repeated_hierarchy"
+            ]
+          }
+        },
+        "result": {
+          "id": "chrome.history.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "ui_observation": [
+                "screen_image",
+                "ui_hierarchy"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "chrome.history.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    },
+    {
+      "target_id": "chrome.downloads",
+      "item_types": [
+        "download_collection",
+        "download_entry"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "ui_observation"
+      ],
+      "rules": {
+        "identification": {
+          "id": "chrome.parse_downloads",
+          "parameters": {
+            "counted_item_types": [
+              "download_entry"
+            ],
+            "ui_criteria": {
+              "row_clickable": true,
+              "title_sources": [
+                "title.text",
+                "thumbnail.content-desc"
+              ],
+              "optional_child_resource_ids": [
+                "caption"
+              ],
+              "date_resource_id": "date",
+              "window_merge": "ordered_overlap_with_missing_field_enrichment"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "chrome.downloads.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "repeated_hierarchy"
+            ]
+          }
+        },
+        "result": {
+          "id": "chrome.downloads.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "ui_observation": [
+                "screen_image",
+                "ui_hierarchy"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "chrome.downloads.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    },
+    {
+      "target_id": "chrome.bookmarks",
+      "item_types": [
+        "bookmark_collection",
+        "bookmark_entry"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "ui_observation"
+      ],
+      "rules": {
+        "identification": {
+          "id": "chrome.parse_bookmarks",
+          "parameters": {
+            "counted_item_types": [
+              "bookmark_entry"
+            ],
+            "ui_criteria": {
+              "identity_fields": [
+                "kind",
+                "folder_path",
+                "title"
+              ],
+              "traverse_folders": true
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "chrome.bookmarks.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "recursive_bookmarks_exhausted"
+            ]
+          }
+        },
+        "result": {
+          "id": "chrome.bookmarks.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "ui_observation": [
+                "screen_image",
+                "ui_hierarchy"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "chrome.bookmarks.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    },
+    {
+      "target_id": "chrome.recent_tabs",
+      "item_types": [
+        "recent_tab_collection",
+        "recent_tab_entry"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "ui_observation"
+      ],
+      "rules": {
+        "identification": {
+          "id": "chrome.parse_recent_tabs",
+          "parameters": {
+            "counted_item_types": [
+              "recent_tab_entry"
+            ],
+            "ui_criteria": {
+              "row_resource_id": "recent_tabs_list_item_layout",
+              "required_child_resource_id": "title_row",
+              "group_resource_id": "recent_tabs_group_view"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "chrome.recent_tabs.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "repeated_hierarchy"
+            ]
+          }
+        },
+        "result": {
+          "id": "chrome.recent_tabs.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "ui_observation": [
+                "screen_image",
+                "ui_hierarchy"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "chrome.recent_tabs.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    }
+  ],
+  "selectors": {
+    "chrome.home": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.android.chrome",
+        "selector_id": "chrome.home.resource-id",
+        "value": "com.android.chrome:id/home_button"
+      },
+      "constraints": {}
+    },
+    "chrome.close": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.android.chrome",
+        "selector_id": "chrome.close.resource-id",
+        "value": "com.android.chrome:id/close_menu_id"
+      },
+      "constraints": {}
+    },
+    "chrome.menu": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.android.chrome",
+        "selector_id": "chrome.menu.resource-id",
+        "value": "com.android.chrome:id/menu_button"
+      },
+      "constraints": {}
+    },
+    "chrome.menu.list": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.android.chrome",
+        "selector_id": "chrome.menu.list.resource-id",
+        "value": "com.android.chrome:id/app_menu_list"
+      },
+      "constraints": {}
+    },
+    "chrome.menu.history": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.android.chrome",
+        "selector_id": "chrome.menu.history.resource-id",
+        "value": "com.android.chrome:id/open_history_menu_id"
+      },
+      "constraints": {}
+    },
+    "chrome.menu.downloads": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.android.chrome",
+        "selector_id": "chrome.menu.downloads.resource-id",
+        "value": "com.android.chrome:id/downloads_menu_id"
+      },
+      "constraints": {}
+    },
+    "chrome.menu.bookmarks": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.android.chrome",
+        "selector_id": "chrome.menu.bookmarks.resource-id",
+        "value": "com.android.chrome:id/all_bookmarks_menu_id"
+      },
+      "constraints": {}
+    },
+    "chrome.menu.recent-tabs": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.android.chrome",
+        "selector_id": "chrome.menu.recent-tabs.resource-id",
+        "value": "com.android.chrome:id/recent_tabs_menu_id"
+      },
+      "constraints": {}
+    },
+    "chrome.menu.settings": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.android.chrome",
+        "selector_id": "chrome.menu.settings.resource-id",
+        "value": "com.android.chrome:id/preferences_id"
+      },
+      "constraints": {}
+    },
+    "chrome.screen.settings": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.android.chrome",
+        "selector_id": "chrome.screen.settings.resource-id",
+        "value": "com.android.chrome:id/account_management_account_row"
+      },
+      "constraints": {}
+    },
+    "chrome.screen.history": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.android.chrome",
+        "selector_id": "chrome.screen.history.resource-id",
+        "value": "com.android.chrome:id/history_page_recycler_view"
+      },
+      "constraints": {}
+    },
+    "chrome.screen.downloads": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.android.chrome",
+        "selector_id": "chrome.screen.downloads.resource-id",
+        "value": "com.android.chrome:id/download_home_recycler_view"
+      },
+      "constraints": {}
+    },
+    "chrome.screen.bookmarks": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.android.chrome",
+        "selector_id": "chrome.screen.bookmarks.resource-id",
+        "value": "com.android.chrome:id/selectable_list"
+      },
+      "constraints": {}
+    },
+    "chrome.bookmarks.go-back": {
+      "selector": {
+        "kind": "content_description",
+        "owner_package": "com.android.chrome",
+        "selector_id": "chrome.bookmarks.go-back.content-description",
+        "value": "Go back"
+      },
+      "constraints": {}
+    },
+    "chrome.screen.recent-tabs": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.android.chrome",
+        "selector_id": "chrome.screen.recent-tabs.resource-id",
+        "value": "com.android.chrome:id/recent_tabs_root"
+      },
+      "constraints": {}
+    }
+  },
+  "timings": {
+    "default_timeout": 5.0,
+    "poll_interval": 0.2,
+    "transition_settle": 0.4,
+    "application_start_settle": 0.8
+  },
+  "parameters": {}
+}

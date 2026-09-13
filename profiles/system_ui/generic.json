@@ -1,0 +1,82 @@
+{
+  "name": "generic",
+  "description": "Known unverified default Android/Google Pixel-like System UI candidates. Runtime code must confirm the resulting state.",
+  "manufacturer_match": [
+    "google",
+    "generic"
+  ],
+  "operations": {
+    "dnd": {
+      "strategy": "button_based",
+      "direct_intents": [
+        "am start -a android.settings.ZEN_MODE_SETTINGS",
+        "am start -a android.settings.ZEN_MODE_SETTINGS -f 0x10008000"
+      ],
+      "title_labels": [
+        "Do Not Disturb",
+        "Do not disturb"
+      ],
+      "enable_button_resource_ids": [
+        "com.android.settings:id/zen_mode_settings_turn_on_button"
+      ],
+      "disable_button_resource_ids": [
+        "com.android.settings:id/zen_mode_settings_turn_off_button"
+      ],
+      "enable_button_labels": [
+        "Turn on now"
+      ],
+      "disable_button_labels": [
+        "Turn off now"
+      ],
+      "hide_notifications": {
+        "required": false
+      }
+    },
+    "airplane": {
+      "strategy": "adb_shell_candidates",
+      "state_command": "cmd connectivity airplane-mode",
+      "enabled_value": "enabled",
+      "disabled_value": "disabled",
+      "enable_commands": [
+        "cmd connectivity airplane-mode enable"
+      ],
+      "disable_commands": [
+        "cmd connectivity airplane-mode disable"
+      ]
+    },
+    "network": {
+      "wifi": {
+        "strategy": "adb_shell_candidates",
+        "enable_commands": [
+          "svc wifi enable",
+          "cmd wifi set-wifi-enabled enabled",
+          "settings put global wifi_on 1"
+        ],
+        "disable_commands": [
+          "svc wifi disable",
+          "cmd wifi set-wifi-enabled disabled",
+          "settings put global wifi_on 0"
+        ]
+      }
+    },
+    "recent_apps": {
+      "strategy": "close_all_button",
+      "settle_sec": 0.5,
+      "close_all_labels": [
+        "Clear all"
+      ],
+      "reveal_direction": "right",
+      "max_reveal_swipes": 8,
+      "reveal_settle_sec": 0.2
+    },
+    "bluetooth": {
+      "strategy": "adb_shell",
+      "state_command": "settings get global bluetooth_on",
+      "enabled_value": "1",
+      "disabled_value": "0",
+      "enable_command": "cmd bluetooth_manager enable",
+      "disable_command": "cmd bluetooth_manager disable",
+      "paired_devices_command": "dumpsys bluetooth_manager"
+    }
+  }
+}

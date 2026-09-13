@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: "If you use AURA in research, cite the accompanying manuscript and identify the repository revision used."
+type: software
+title: "AURA"
+authors:
+  - family-names: "Kim"
+    given-names: "Junki"
+    orcid: "https://orcid.org/0009-0007-6635-7968"
+version: "0.1.0"
+date-released: "2026-09-13"
+repository-code: "https://github.com/JJun1207/AURA"
+url: "https://github.com/JJun1207/AURA"
+license: Apache-2.0
+keywords:
+  - mobile forensics
+  - UI-based data acquisition
+  - provenance
+  - Android
+preferred-citation:
+  type: unpublished
+  title: "AURA: A Framework for UI-Based Mobile Data Acquisition and Provenance Review"
+  authors:
+    - family-names: "Kim"
+      given-names: "Junki"
+    - family-names: "Park"
+      given-names: "Jungheum"
+    - family-names: "Lee"
+      given-names: "Sangjin"
+  year: 2026
+  notes: "Manuscript submitted to Forensic Science International: Digital Investigation."

@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "run": {
+    "app_id": "example",
+    "condition": {
+      "acquisition_condition": "local-first"
+    },
+    "device_session_id": "session-fixture",
+    "route": "materialize",
+    "run_id": "run-001"
+  },
+  "items": [
+    {
+      "acquisition_item_id": "item-000001",
+      "context": {"label": "example-item"},
+      "item_type": "file_content",
+      "source": {"name": "example.bin"},
+      "target_id": "example.files"
+    }
+  ],
+  "attempts": [
+    {
+      "acquisition_item_id": "item-000001",
+      "acquisition_status": "acquired",
+      "attempt_id": "attempt-000001",
+      "context": {},
+      "details": {},
+      "method": "materialize",
+      "phase": "local_first",
+      "procedure_status": "completed",
+      "reason": null
+    }
+  ],
+  "observations": [
+    {
+      "action_id": "action-000001",
+      "attempt_id": "attempt-000001",
+      "hierarchy_artifact_id": "artifact-000002",
+      "observation_id": "observation-000001",
+      "screen_artifact_id": "artifact-000001"
+    }
+  ],
+  "artifacts": [
+    {
+      "action": "observe_example",
+      "action_id": "action-000001",
+      "artifact_id": "artifact-000001",
+      "attempt_id": "attempt-000001",
+      "context": {},
+      "kind": "screen_image",
+      "observation_id": "observation-000001",
+      "relative_path": "artifacts/screen.png",
+      "sha256": "",
+      "size": 0
+    },
+    {
+      "action": "observe_example",
+      "action_id": "action-000001",
+      "artifact_id": "artifact-000002",
+      "attempt_id": "attempt-000001",
+      "context": {},
+      "kind": "ui_hierarchy",
+      "observation_id": "observation-000001",
+      "relative_path": "artifacts/hierarchy.xml",
+      "sha256": "",
+      "size": 0
+    }
+  ],
+  "outcomes": [
+    {
+      "acquisition_status": "acquired",
+      "action_id": "action-000001",
+      "attempt_id": "attempt-000001",
+      "context": {},
+      "details": {},
+      "observation_id": "observation-000001",
+      "outcome_id": "outcome-000001",
+      "reason": null
+    }
+  ],
+  "outcome": {
+    "action_id": "action-000001",
+    "context": {},
+    "details": {},
+    "reason": null,
+    "status": "complete"
+  }
+}

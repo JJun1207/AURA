@@ -1,0 +1,209 @@
+{
+  "app_id": "google_drive",
+  "package_name": "com.google.android.apps.docs",
+  "app_version": "2.26.337.0.all.alldpi",
+  "acquisition_methods": [
+    "materialize"
+  ],
+  "targets": [
+    {
+      "target_id": "google_drive.inventory",
+      "item_types": [
+        "inventory_collection",
+        "folder_metadata",
+        "file_metadata"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "ui_observation"
+      ],
+      "rules": {
+        "identification": {
+          "id": "google_drive.parse_listing_and_information",
+          "parameters": {
+            "counted_item_types": [
+              "folder_metadata",
+              "file_metadata"
+            ],
+            "ui_criteria": {
+              "identity_fields": [
+                "drive_path",
+                "kind"
+              ],
+              "item_kinds": [
+                "folder",
+                "file"
+              ],
+              "include_activity": "controlled_online"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "google_drive.inventory.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "recursive_listing_exhausted"
+            ]
+          }
+        },
+        "result": {
+          "id": "google_drive.inventory.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "ui_observation": [
+                "screen_image",
+                "ui_hierarchy"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "google_drive.inventory.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    },
+    {
+      "target_id": "google_drive.files",
+      "item_types": [
+        "file_content"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "file",
+        "ui_observation"
+      ],
+      "rules": {
+        "identification": {
+          "id": "google_drive.listed_file_download",
+          "parameters": {
+            "counted_item_types": [
+              "file_content"
+            ],
+            "ui_criteria": {
+              "identity_fields": [
+                "drive_path",
+                "name"
+              ],
+              "environment": "controlled_online",
+              "selection": "changed_download_inventory"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "google_drive.files.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "recursive_listing_exhausted"
+            ]
+          }
+        },
+        "result": {
+          "id": "google_drive.files.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "file": [
+                "file",
+                "acquired_file"
+              ],
+              "ui_observation": [
+                "screen_image",
+                "ui_hierarchy"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "google_drive.files.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      }
+    }
+  ],
+  "selectors": {
+    "google_drive.navigation.files": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.google.android.apps.docs",
+        "selector_id": "google-drive.navigation.files.resource-id",
+        "value": "com.google.android.apps.docs:id/menu_navigation_drives"
+      },
+      "constraints": {}
+    },
+    "google_drive.screen.list": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.google.android.apps.docs",
+        "selector_id": "google-drive.screen.list.resource-id",
+        "value": "scrollList"
+      },
+      "constraints": {}
+    },
+    "google_drive.screen.information": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.google.android.apps.docs",
+        "selector_id": "google-drive.screen.information.resource-id",
+        "value": "com.google.android.apps.docs:id/details_recyclerview"
+      },
+      "constraints": {}
+    },
+    "google_drive.information.back": {
+      "selector": {
+        "kind": "content_description",
+        "owner_package": "com.google.android.apps.docs",
+        "selector_id": "google-drive.information.back.content-description",
+        "value": "Back"
+      },
+      "constraints": {}
+    },
+    "google_drive.menu.view-information": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.google.android.apps.docs",
+        "selector_id": "google-drive.menu.view-information.text",
+        "value": "View information"
+      },
+      "constraints": {}
+    },
+    "google_drive.menu.download": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.google.android.apps.docs",
+        "selector_id": "google-drive.menu.download.text",
+        "value": "Download"
+      },
+      "constraints": {}
+    }
+  },
+  "timings": {
+    "default_timeout": 8.0,
+    "poll_interval": 0.2,
+    "transition_settle": 0.6,
+    "application_start_settle": 1.0,
+    "inventory_probe_interval": 0.5
+  },
+  "parameters": {
+    "root_label": "My Drive",
+    "download_root": "/sdcard/Download",
+    "inventory_probes": 20
+  }
+}

@@ -1,0 +1,1 @@
+{"action":"observe_example","action_id":"action-000001","attempt_id":"attempt-000001","context":{"device_session_id":"session-fixture","run_id":"run-001"},"details":{},"event_id":"event-000001","event_type":"action","status":"success","timestamp":"2026-09-01T00:00:00+00:00"}
