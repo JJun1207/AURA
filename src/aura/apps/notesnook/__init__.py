@@ -40,7 +40,7 @@ def collect(context: RunContext) -> Outcome:
     device = NotesnookDeviceAdapter(context)
     outputs = NotesnookOutputs(context, device, target["ref"])
     try:
-        account = collector.collect_account_context(
+        account, notes_observation_id = collector.collect_account_context(
             device,
             outputs,
             target["ref"],
@@ -50,15 +50,9 @@ def collect(context: RunContext) -> Outcome:
         outputs.preserve_failure(str(error))
         raise
     route = Route(context.base_context["route"])
-    if not account["sync_gate_passed"]:
-        report = {
-            "status": "partial",
-            "reason_code": "notesnook_sync_condition_mismatch",
-            **account,
-        }
-    elif route is Route.EXPORT:
+    if route is Route.EXPORT:
         try:
-            report = collector.collect(device, outputs, target["ref"])
+            report = collector.collect(device, outputs, target["ref"], initial_observation_id=notes_observation_id)
         except Exception as error:
             outputs.preserve_failure(str(error))
             raise
@@ -70,7 +64,7 @@ def collect(context: RunContext) -> Outcome:
             **account,
         }
     else:
-        report = collector.materialize(device, outputs, target["ref"])
+        report = collector.materialize(device, outputs, target["ref"], initial_observation_id=notes_observation_id)
     report = {**account, **report}
     reason = report.get("reason_code")
     try:
@@ -84,7 +78,7 @@ def collect(context: RunContext) -> Outcome:
             "workspace_state",
             "acquisition_environment",
             "sync_label",
-            "sync_gate_passed",
+            "sync_label_matches_environment",
             "selected_document_count",
             "export_path",
             "export_size",
@@ -92,13 +86,15 @@ def collect(context: RunContext) -> Outcome:
             "note_count",
             "history_version_count",
             "attachment_count",
+            "attachment_not_acquired_count",
+            "attachment_acquired_count",
             "trash_count",
             "current_note_partial_count",
             "failure",
         )
         if key in report
     }
-    if report.get("status") == "partial" and not report.get("failure") and reason != "notesnook_current_note_partial":
+    if report.get("status") == "partial" and not report.get("failure") and reason not in {"notesnook_current_note_partial", "notesnook_attachments_not_acquired"}:
         outputs.preserve_failure(str(reason))
     outputs.finalize()
     return Outcome(

@@ -9,7 +9,9 @@ from . import collector
 
 def collect(context: RunContext) -> Outcome:
     context.app_profile.require_identification_rules({
-        'notion.content': ('notion.workspace_page_and_database_identity', {'identity_fields': ['workspace_ref', 'page_ref', 'database_item_ref'], 'members_scope': 'selected_workspace'}),
+        'notion.inventory': ('notion.workspace_home_inventory', {'identity_fields': ['workspace_ref', 'page_ref']}),
+        'notion.members': ('notion.workspace_members', {'members_scope': 'selected_workspace'}),
+        'notion.content': ('notion.workspace_page_and_database_identity', {'identity_fields': ['workspace_ref', 'page_ref', 'database_item_ref']}),
         'notion.attachments': ('notion.parse_page_candidates', {'identity_basis': 'parent_page_and_attachment_ref', 'external_urls': 'out_of_scope'}),
         'notion.export': ('notion.top_level_export_scope', {'classification': ['general', 'database'], 'format': 'Markdown & CSV', 'include_subpages': True}),
     })

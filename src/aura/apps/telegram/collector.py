@@ -1,8 +1,25 @@
 """Mutable Telegram Collector with T01 and T02 row recognition."""
+from ...collection import (
+    unique_overlap_anchor,
+    reconcile_overlap,
+    one_candidate,
+    matching_candidates,
+    display_pattern,
+    display_text,
+    device_profile,
+    visit_candidates,
+    overlap_candidates,
+    poll_samples,
+)
+from ...parsing import node_values, parse_bounds, contains_bounds as _contains, overlaps_bounds as _intersects
+from ...geometry import intersect_bounds
 
 from collections.abc import Mapping
+from ...artifacts import changed_inventory, displayed_size_matches
+from operator import itemgetter
 from datetime import datetime, timedelta
 import re
+import time
 import unicodedata
 import xml.etree.ElementTree as ET
 
@@ -10,27 +27,11 @@ from .adapter import normalize_retained_basename
 
 
 PACKAGE = "org.telegram.messenger"
-_BOUNDS = re.compile(r"^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$")
 _TIME_LABEL = (
     r"(?:(?:[1-9]|1[0-2]):[0-5][0-9] (?:AM|PM)|"
     r"(?:[01]?[0-9]|2[0-3]):[0-5][0-9])"
 )
-_MESSAGE_STATUS = re.compile(
-    r"\A(.+)\n(Received|Sent) at "
-    rf"({_TIME_LABEL})"
-    r"(?:\n|, (?P<status>Seen|Not seen)\n?)\Z",
-    re.DOTALL,
-)
-_CHANNEL_STATUS = re.compile(
-    r"\A(?P<body>.+)\nSent at "
-    rf"(?P<time>{_TIME_LABEL}), Not seen\n"
-    r"Viewed (?P<views>\d[\d,]*) times?\n\Z",
-    re.DOTALL,
-)
 _MEDIA_SIZE = r"\d+(?:\.\d+)? (?:KB|MB|GB)"
-_CHANNEL_VIDEO = re.compile(
-    rf"\AVideo, (?P<duration>\d+) seconds?(?:, {_MEDIA_SIZE})?\Z"
-)
 _FILE_BODY = rf", [A-Z0-9]+ file.+, {_MEDIA_SIZE}"
 _VIDEO_DURATION = r"(?:\d+ minutes? )?\d+ seconds?"
 _MESSAGE_VIDEO = (
@@ -38,6 +39,7 @@ _MESSAGE_VIDEO = (
     rf"Video(?:: |\n)Downloaded {_MEDIA_SIZE} of {_MEDIA_SIZE}, "
     rf"{_VIDEO_DURATION})"
 )
+_CHANNEL_VIDEO = re.compile(rf"\A{_MESSAGE_VIDEO}\Z")
 _CHANNEL_FILE = re.compile(rf"\A{_FILE_BODY}\Z", re.DOTALL)
 _ATTACHMENT_ROW = re.compile(
     # ponytail: T03-M knows Photo; T03-A adds live-validated shapes.
@@ -53,8 +55,7 @@ _MESSAGE_ATTACHMENT_ROW = re.compile(
     rf"(?P<file>{_FILE_BODY})"
     r")(?:\n(?!Received at |Sent at ).+)?\n(?:Received|Sent) at "
     rf"(?P<time>{_TIME_LABEL})"
-    # Live video XML can append an empty reactions section to the timestamp.
-    r"(?:, (?:Seen|Not seen))?(?:\n|Reactions: \n\n)\Z",
+    r"(?:, (?:Seen|Not seen))?\n\Z",
     re.DOTALL,
 )
 _DATE_CONTEXT = re.compile(
@@ -98,11 +99,10 @@ def _own_labels(node):
 
 
 def _rect(node):
-    match = _BOUNDS.fullmatch(node.get("bounds", ""))
-    if match is None:
+    try:
+        return parse_bounds(node.get('bounds', ''), allow_negative=False)
+    except ValueError:
         return None
-    rect = tuple(map(int, match.groups()))
-    return rect if rect[0] < rect[2] and rect[1] < rect[3] else None
 
 
 def _owned(node):
@@ -113,36 +113,12 @@ def _shown(node):
     return node.get("visible-to-user") == "true"
 
 
-def _contains(outer, inner):
-    return (
-        outer[0] <= inner[0]
-        and outer[1] <= inner[1]
-        and outer[2] >= inner[2]
-        and outer[3] >= inner[3]
-    )
-
-
-def _intersects(first, second):
-    return (
-        first[0] < second[2]
-        and first[2] > second[0]
-        and first[1] < second[3]
-        and first[3] > second[1]
-    )
 
 
 def _visible_row_rect(rect, viewport):
-    if not _intersects(rect, viewport):
-        return None
-    visible = (
-        max(rect[0], viewport[0]),
-        max(rect[1], viewport[1]),
-        min(rect[2], viewport[2]),
-        min(rect[3], viewport[3]),
-    )
     full_height = rect[3] - rect[1]
     minimum_height = max(44, min(96, int(full_height * 0.45)))
-    return visible if visible[3] - visible[1] >= minimum_height else None
+    return intersect_bounds(rect, viewport, minimum_height=minimum_height)
 
 
 def _semantic_node_selector(node, selector_id):
@@ -164,6 +140,15 @@ def _semantic_node_selector(node, selector_id):
         "value": value,
         "constraints": {"class_name": class_name},
     }
+
+
+def _web_tabs_bounds(device, root, screen):
+    return [
+        _rect(node)
+        for node in device.matching_elements(root, "telegram.list.web-tabs")
+        if _owned(node) and _shown(node) and _rect(node) is not None
+        and _intersects(_rect(node), screen)
+    ]
 
 
 def _default_list(device, root):
@@ -239,11 +224,12 @@ def _default_list(device, root):
         or title_bar_rect[2] - title_bar_rect[0] < (screen[2] - screen[0]) * 0.9
     ):
         return None
+    overlays = _web_tabs_bounds(device, root, screen)
     viewport = (
         screen[0],
         int(max(title_bar_rect[3], title_region[3])),
         screen[2],
-        min(rect[1] for rect in nav_rects),
+        min(rect[1] for rect in (*nav_rects, *overlays)),
     )
     if viewport[1] >= viewport[3]:
         return None
@@ -272,7 +258,7 @@ def _default_list(device, root):
 
 def _establish_list_top(device, state, observation_id, root, page):
     selectors = (
-        "telegram.list.top.title", "telegram.list.top.waiting",
+        "telegram.list.top.title", "telegram.list.top.logo", "telegram.list.top.waiting",
         "telegram.list.top.waiting-ellipsis", "telegram.list.top.connecting",
     )
     try:
@@ -661,7 +647,7 @@ def _message_page(device, root):
         screen[0],
         max(back_rect[3], header_rect[3]),
         screen[2],
-        composer_rect[1],
+        min(rect[1] for rect in (composer_rect, *_web_tabs_bounds(device, root, screen))),
     )
     if viewport[1] >= viewport[3]:
         return None
@@ -795,12 +781,12 @@ def _container_info_page(device, root):
 
 def _metadata_fingerprint(device, observed, container_type):
     member_labels = (
-        sorted({
+        sorted(
             _norm(label)
             for label in observed["member_labels"]
             if _norm(label)
-        })
-        if observed["members_complete"] else []
+        )
+        if observed["members_complete"] and not (observed["username"] or observed["mobile"]) else []
     )
     values = {
         "type_label": _norm(observed["type_label"]) or None,
@@ -811,14 +797,12 @@ def _metadata_fingerprint(device, observed, container_type):
     if values["username"] is None and values["mobile"] is None:
         values.update({
             "display_name": _norm(observed.get("display_name")) or None,
-            "member_count": observed.get("member_count"),
-            "subscriber_count": observed.get("subscriber_count"),
         })
     inputs = [
         key for key, value in values.items() if value not in (None, [], "")
     ]
     payload = {
-        "method": "telegram-info-v1",
+        "method": "telegram-info-v2",
         "container_type": container_type,
         "fields": {key: values[key] for key in inputs},
     }
@@ -839,9 +823,7 @@ def _chatroom_revisit_key(
     logical_chatroom_id,
     identity_status,
 ):
-    # ponytail: exact same type/name/count stays ambiguous until Telegram
-    # exposes a native identifier in this UI.
-    if identity_status in {"identified", "ambiguous"}:
+    if identity_status == "identified":
         return logical_chatroom_id
     return None
 
@@ -959,13 +941,26 @@ def _parse_container_metadata(device, page, *, display_name=None):
     container_type, type_status, type_basis = _classify_container_type(
         page, observed
     )
+    if container_type == "group":
+        rows = set(device.matching_elements(page["list"], "telegram.info.member-row"))
+        for row in page["list"]:
+            if row not in rows or not _shown(row):
+                continue
+            names = node_values(device.matching_elements(row, "telegram.text"))
+            if names and row.get("content-desc", "").startswith(names[0] + ","):
+                observed["member_labels"].append(names[0])
+        observed["members_complete"] = bool(observed["member_labels"]) and len(observed["member_labels"]) == member_count
     fingerprint, inputs = _metadata_fingerprint(
         device, observed, container_type
     )
     stable = username is not None or mobile is not None
-    if container_type in {"direct", "bot", "service"} and stable:
+    deleted = _norm(display_name) == _norm(display_text(device_profile(device), 'deleted_account'))
+    name_identity = bool(_norm(display_name)) and not deleted
+    if container_type == "group":
+        name_identity = name_identity and observed["members_complete"]
+    if container_type is not None and (stable or name_identity):
         identity_status = "identified"
-    elif container_type in {"group", "channel"}:
+    elif container_type is not None and (deleted or container_type == "group"):
         identity_status = "ambiguous"
     else:
         identity_status = "insufficient"
@@ -978,10 +973,13 @@ def _parse_container_metadata(device, page, *, display_name=None):
             ["container_type_unresolved"]
             if type_status == "unresolved" else []
         ),
-        "fingerprint_method": "telegram-info-v1",
+        "fingerprint_method": "telegram-info-v2",
         "fingerprint_inputs": inputs,
         "fingerprint": fingerprint,
         "identity_status": identity_status,
+        "identity_caveat": (
+            "display_metadata_may_collide_for_distinct_chats" if not stable else None
+        ),
     }
 
 
@@ -1004,7 +1002,7 @@ def _single_text_message(device, page):
             page["viewport"], rect
         ):
             return None, "history_boundary_not_established"
-        match = _MESSAGE_STATUS.fullmatch(node.get("text", ""))
+        match = display_pattern(device_profile(device), 'message_status', flags=re.DOTALL).fullmatch(node.get("text", ""))
         if (
             node in text_rows
             and match is not None
@@ -1028,7 +1026,23 @@ def _single_text_message(device, page):
     return candidates[0], None
 
 
-def _parse_message_row(raw, container_type, sender_context):
+def _message_without_reactions(raw, profile):
+    reaction = display_pattern(profile, 'message_reactions', flags=re.DOTALL).fullmatch(raw)
+    if reaction is not None:
+        return reaction.group('message') + '\n' + (reaction.group('views') or '')
+    return raw
+
+
+def _message_comparison_text(raw, profile):
+    value = _message_without_reactions(raw, profile)
+    channel = display_pattern(profile, 'channel_status', flags=re.DOTALL).fullmatch(value)
+    # The channel pattern verifies the fixed status; compare body/time, not view counts.
+    return value[:channel.end('time')] if channel is not None else value
+
+
+def _parse_message_row(raw, container_type, sender_context, profile):
+    # Interpretation never replaces the raw XML stored with the message.
+    raw = _message_without_reactions(raw, profile)
     if _DATE_CONTEXT.fullmatch(raw.strip()) is not None:
         return {
             "row_class": "date_context",
@@ -1073,7 +1087,7 @@ def _parse_message_row(raw, container_type, sender_context):
             "limitations": ["attachment_deferred_t03a"],
         }, sender_context
     channel = (
-        _CHANNEL_STATUS.fullmatch(raw)
+        display_pattern(profile, 'channel_status', flags=re.DOTALL).fullmatch(raw)
         if container_type == "channel" else None
     )
     if channel is not None:
@@ -1095,7 +1109,10 @@ def _parse_message_row(raw, container_type, sender_context):
             return {
                 "row_class": "attachment",
                 "rendered": {
-                    "duration_seconds": int(video.group("duration")),
+                    "duration_seconds": sum(
+                        int(amount) * (60 if unit == "minute" else 1)
+                        for amount, unit in re.findall(r"(\d+) (minute|second)", body)
+                    ),
                     "kind": "video",
                     "view_count": view_count,
                 },
@@ -1125,7 +1142,7 @@ def _parse_message_row(raw, container_type, sender_context):
             "limitations": [],
         }, sender_context
     match = (
-        _MESSAGE_STATUS.fullmatch(raw)
+        display_pattern(profile, 'message_status', flags=re.DOTALL).fullmatch(raw)
         if container_type in {"direct", "bot", "service", "group"}
         else None
     )
@@ -1161,7 +1178,7 @@ def _parse_message_row(raw, container_type, sender_context):
 
 
 def _message_window(
-    page, container_type, *, action_id, observation_id, window_index, state
+    page, container_type, *, action_id, observation_id, window_index, state, profile
 ):
     if page is None:
         return None, [], "message_list_not_verified"
@@ -1191,9 +1208,9 @@ def _message_window(
         if source["viewport_visibility"] == "clipped":
             if node.get("focusable") == "true":
                 parsed, _ = _parse_message_row(
-                    raw, container_type, None
+                    raw, container_type, None, profile=profile
                 )
-                action_bounds = _bottom_clipped_file_bounds(
+                action_bounds = _bottom_clipped_attachment_bounds(
                     page["viewport"],
                     rect,
                     parsed.get("rendered", {}).get("kind"),
@@ -1216,6 +1233,7 @@ def _message_window(
                         ),
                         "reason": "row_clipped_by_viewport",
                         "raw": raw,
+                        "comparison_text": _message_comparison_text(raw, profile),
                         "source": source,
                     })
                     continue
@@ -1248,7 +1266,7 @@ def _message_window(
             }
         else:
             parsed, sender_context = _parse_message_row(
-                raw, container_type, sender_context
+                raw, container_type, sender_context, profile=profile
             )
         rendered = parsed["rendered"]
         time_label = parsed["time_label"]
@@ -1257,7 +1275,7 @@ def _message_window(
             "raw": raw,
             "signature": (
                 parsed["row_class"],
-                raw,
+                _message_comparison_text(raw, profile),
                 rendered.get("sender"),
                 rendered.get("direction"),
                 time_label,
@@ -1291,7 +1309,7 @@ def _message_window(
     return rows, deferred, None
 
 
-def _attachment_action_selector(page, row):
+def _attachment_action_selector(page, row, profile):
     if page is None or row.get("row_class") != "attachment":
         return None
     literal_slot = row.get("source", {}).get("literal_slot")
@@ -1302,32 +1320,31 @@ def _attachment_action_selector(page, row):
     ):
         return None
     node = children[literal_slot]
-    rect = tuple(row.get("source", {}).get("bounds", ()))
+    rect = _rect(node)
     if (
-        len(rect) != 4
-        or _rect(node) != rect
-        or node.get("text", "") != row.get("raw")
+        rect is None
+        or _message_comparison_text(node.get("text", ""), profile)
+        != _message_comparison_text(row.get("raw", ""), profile)
     ):
         return None
-    action_bounds = _bottom_clipped_file_bounds(
+    action_bounds = _bottom_clipped_attachment_bounds(
         page["viewport"],
         rect,
         row.get("rendered", {}).get("kind"),
     )
     if (
         not _contains(page["viewport"], rect)
-        and tuple(row.get("source", {}).get("action_bounds", ()))
-        != action_bounds
+        and action_bounds is None
     ):
         return None
     return _semantic_node_selector(node, "telegram.attachment-row")
 
 
-def _attachment_menu_bounds(row):
-    source = row.get("source", {})
-    rect = tuple(source.get("action_bounds", source.get("bounds", ())))
-    if len(rect) != 4:
+def _attachment_menu_bounds(page, row, profile):
+    if _attachment_action_selector(page, row, profile) is None:
         return None
+    rect = _rect(list(page['list'])[row['source']['literal_slot']])
+    rect = _bottom_clipped_attachment_bounds(page['viewport'], rect, row['rendered']['kind']) or rect
     left, top, right, bottom = rect
     width = right - left
     if width < 1:
@@ -1335,9 +1352,9 @@ def _attachment_menu_bounds(row):
     return right - max(1, width // 100), top, right, bottom
 
 
-def _bottom_clipped_file_bounds(viewport, rect, kind):
+def _bottom_clipped_attachment_bounds(viewport, rect, kind):
     if (
-        kind != "file"
+        kind not in {"file", "photo", "video"}
         or rect[1] < viewport[1]
         or rect[3] <= viewport[3]
     ):
@@ -1427,10 +1444,8 @@ def _pull_attachment_file(
 def _changed_downloads(before, after):
     previous = {path: (size, mtime) for path, size, mtime in before}
     result = []
-    for path, size, mtime in after:
+    for path, size, mtime in changed_inventory(before, after):
         old = previous.get(path)
-        if old == (size, mtime):
-            continue
         result.append({
             "device_path": path,
             "basename": path.rsplit("/", 1)[-1],
@@ -1443,12 +1458,21 @@ def _changed_downloads(before, after):
     return tuple(result)
 
 
+def _attachment_size_matches(row, size):
+    kind = row.get("rendered", {}).get("kind")
+    body = re.match(
+        _FILE_BODY if kind == "file" else _MESSAGE_VIDEO,
+        row.get("raw", ""),
+    ) if kind in {"file", "video"} else None
+    sizes = re.findall(_MEDIA_SIZE, body.group()) if body else []
+    return displayed_size_matches(size, sizes[-1] if sizes else None)
+
+
 def _history_window_signature(rows):
     return tuple(
         (
             row["signature"],
             row["source"]["literal_slot"],
-            tuple(row["source"]["bounds"]),
         )
         for row in rows
     )
@@ -1526,6 +1550,7 @@ def _write_attachment_outputs(
     menu_observation_id=None,
     unavailable_action_id=None,
     unavailable_observation_id=None,
+    inventory_failure=None,
 ):
     ordinal = attachment_ref.removeprefix("attachment-")
     selected = candidates[0] if len(candidates) == 1 else None
@@ -1639,7 +1664,8 @@ def _write_attachment_outputs(
                     device.canonical_sha256(after) if after is not None else None
                 ),
                 "after_count": len(after) if after is not None else None,
-                **({"after_inventory_status": "not_performed"} if after is None else {}),
+                **({"after_inventory_status": "failed" if inventory_failure else "not_performed"} if after is None else {}),
+                **({"inventory_failure": inventory_failure} if inventory_failure else {}),
                 "candidate_count": len(candidates),
                 "candidate_reason": (
                     selected["candidate_reason"] if selected else None
@@ -1746,7 +1772,7 @@ def _restored_attachment_window_reason(
         observation_id=observation_id,
         window_index=row["source"]["window_index"],
         state={"message_occurrences": 0},
-    )
+     profile=device_profile(device))
     if (
         parse_reason is not None
         or _history_window_signature(restored_rows)
@@ -1784,7 +1810,9 @@ def _materialize_attachment(
     attachment_ref = _next_id(state, "attachments", "attachment")
     if hasattr(outputs, "begin_attachment"):
         outputs.begin_attachment(attachment_ref, row, container_ref=container_ref, occurrence_ref=occurrence_ref, message_ref=message_ref)
-    if _attachment_action_selector(page, row) is None:
+    # Use the returned XML after each attachment, not the first window's bounds.
+    page = _message_page(device, root)
+    if _attachment_action_selector(page, row, device_profile(device)) is None:
         return (
             observation_id,
             root,
@@ -1829,72 +1857,55 @@ def _materialize_attachment(
             message_ref=message_ref,
         )
 
-    open_action_id = _next_id(
-        state, "actions", "action-attachment-open"
-    )
-    try:
-        menu_bounds = _attachment_menu_bounds(row)
-        if menu_bounds is None:
-            raise ValueError
-        device.click_bounds(
-            open_action_id,
-            menu_bounds,
-            observation_id,
-            anchor="center",
-        )
-    except Exception:
-        return (
-            observation_id,
-            root,
-            None,
-            "attachment_semantic_action_unavailable",
-        )
-
-    opened_observation_id, opened_root, reason = _observe(device, state)
-    if reason is not None:
-        return opened_observation_id, opened_root, None, reason
-
-    menu_observation_id = opened_observation_id
-    menu_root = opened_root
-
-    try:
-        menu = device.matching_elements(menu_root, menu_element)
-    except Exception:
-        menu = ()
-    save_bounds = (
-        _clickable_ancestor_bounds(menu_root, menu[0])
-        if len(menu) == 1 else None
-    )
-    if save_bounds is None:
-        dismiss_action_id = _next_id(
-            state, "actions", "action-attachment-menu-dismiss"
-        )
+    profile = device_profile(device)
+    attempts = profile.parameters["attachment_menu_attempts"]
+    if type(attempts) is not int or attempts < 1:
+        raise ValueError("attachment_menu_attempts must be positive")
+    for _ in range(attempts):
+        open_action_id = _next_id(state, "actions", "action-attachment-open")
         try:
-            device.back(dismiss_action_id, menu_observation_id)
+            menu_bounds = _attachment_menu_bounds(_message_page(device, root), row, profile)
+            if menu_bounds is None:
+                raise ValueError
+            device.click_bounds(open_action_id, menu_bounds, observation_id, anchor="center")
         except Exception:
-            return (
-                menu_observation_id,
-                menu_root,
-                None,
-                "attachment_menu_dismiss_failed",
-            )
-        restored_observation_id, restored_root, reason = (
-            _observe_restored_attachment_window(
-                device,
-                state,
-                dismiss_action_id,
-                row,
-                rows,
-                container_type,
-            )
-        )
+            return observation_id, root, None, "attachment_semantic_action_unavailable"
+
+        # Stable XML alone does not establish that the requested menu has opened.
+        for menu_observation_id, menu_root, reason in poll_samples(
+            lambda: _observe(device, state),
+            timeout=profile.timings["attachment_menu_timeout"],
+            interval=profile.timings["poll_interval"],
+        ):
+            if reason is not None:
+                return menu_observation_id, menu_root, None, reason
+            menu = device.matching_elements(menu_root, menu_element)
+            save_bounds = (_clickable_ancestor_bounds(menu_root, menu[0])
+                           if len(menu) == 1 else None)
+            if save_bounds is not None or _message_page(device, menu_root) is None:
+                break
+        if save_bounds is not None or _message_page(device, menu_root) is None:
+            break
+        reason = _restored_attachment_window_reason(
+            device, menu_root, open_action_id, menu_observation_id, row, rows, container_type)
         if reason is not None:
-            return (
-                restored_observation_id,
-                restored_root,
-                None,
-                reason,
+            return menu_observation_id, menu_root, None, reason
+        # Reuse the fresh, verified chat window for a bounded retry of the same row.
+        observation_id, root = menu_observation_id, menu_root
+
+    if save_bounds is None:
+        restored_observation_id, restored_root = menu_observation_id, menu_root
+        if _message_page(device, menu_root) is None:
+            dismiss_action_id = _next_id(state, "actions", "action-attachment-menu-dismiss")
+            try:
+                device.back(dismiss_action_id, menu_observation_id)
+            except Exception:
+                return menu_observation_id, menu_root, None, "attachment_menu_dismiss_failed"
+            restored_observation_id, restored_root, reason = _observe_restored_attachment_window(
+                device, state, dismiss_action_id, row, rows, container_type,
             )
+            if reason is not None:
+                return restored_observation_id, restored_root, None, reason
         capture, output_reason = _write_attachment_outputs(
             device,
             outputs,
@@ -1957,10 +1968,14 @@ def _materialize_attachment(
         else None
     )
     after = None
+    inventory_failure = None
     candidates = None
     limitation = None
     decision_action_id = None
     if loading is not None:
+        loading_stalled = False
+        interval = device._inventory_interval
+        deadline = time.monotonic() + device.inventory_probes * interval
         loading_observation_id = restored_observation_id
         after_action_id = _next_id(state, "actions", snapshot_prefix)
         inventory_failed = False
@@ -1972,16 +1987,27 @@ def _materialize_attachment(
                 loading_observation_id,
                 baseline=before,
             )
-        except Exception:
-            after = before
+        except Exception as error:
+            inventory_failure = getattr(error, 'diagnostics', None) or {
+                "error": type(error).__name__, "error_message": str(error)}
             inventory_failed = True
-        candidates = _changed_downloads(before, after)
+        candidates = _changed_downloads(before, after) if after is not None else ()
         dismiss_action_id = _next_id(
             state, "actions", "action-attachment-loading-dismiss"
         )
         current_observation_id, current_root, observe_reason = _observe(
             device, state
         )
+        while (
+            observe_reason is None
+            and _attachment_loading_dialog(current_root) is not None
+            and interval > 0
+        ):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(interval, remaining))
+            current_observation_id, current_root, observe_reason = _observe(device, state)
         if observe_reason is not None:
             return (
                 current_observation_id,
@@ -2002,6 +2028,7 @@ def _materialize_attachment(
             restored_observation_id = current_observation_id
             restored_root = current_root
         elif _attachment_loading_dialog(current_root) is not None:
+            loading_stalled = True
             try:
                 device.back(dismiss_action_id, current_observation_id)
             except Exception:
@@ -2038,8 +2065,13 @@ def _materialize_attachment(
             if not candidates
             else "attachment_materialize_ambiguous_candidates"
             if len(candidates) > 1
+            else "attachment_materialize_download_incomplete"
+            if loading_stalled
             else None
         )
+        if not loading_stalled:
+            # The file may have grown while the dialog was open.
+            after = candidates = limitation = inventory_failure = None
     if reason is not None:
         return (
             restored_observation_id,
@@ -2048,7 +2080,7 @@ def _materialize_attachment(
             reason,
         )
 
-    if after is None:
+    if after is None and limitation is None:
         after_action_id = _next_id(state, "actions", snapshot_prefix)
         try:
             after = _snapshot_attachment_files(
@@ -2058,8 +2090,9 @@ def _materialize_attachment(
                 restored_observation_id,
                 baseline=before,
             )
-        except Exception:
-            after = before
+        except Exception as error:
+            inventory_failure = getattr(error, 'diagnostics', None) or {
+                "error": type(error).__name__, "error_message": str(error)}
             candidates = ()
             limitation = "attachment_materialize_inventory_failed"
             decision_action_id = save_action_id
@@ -2073,6 +2106,9 @@ def _materialize_attachment(
                 if len(candidates) > 1
                 else None
             )
+
+    if limitation is None and not _attachment_size_matches(row, candidates[0]["size"]):
+        limitation = "attachment_materialize_display_size_mismatch"
 
     if limitation is not None:
         capture, output_reason = _write_attachment_outputs(
@@ -2089,6 +2125,7 @@ def _materialize_attachment(
             limitation=limitation,
             before=before,
             after=after,
+            inventory_failure=inventory_failure,
             candidates=candidates,
             original=None,
             decision_action_id=decision_action_id,
@@ -2262,14 +2299,19 @@ def _materialize_file_attachment(
     )
 
 
+def _same_message_signature(first, second):
+    # A group's sender can be inherited from a row outside this viewport.
+    # Message text/time/status must still match, including any explicit name.
+    return first == second or (
+        len(first) == len(second) == 6 and first[0] == "message"
+        and first[:2] == second[:2] and first[3:] == second[3:]
+        and (first[2] is None or second[2] is None)
+    )
+
+
 def _overlap_candidates(older, newer):
-    # ponytail: UI windows are bounded; replace O(n²) only if measured.
-    return [
-        size
-        for size in range(1, min(len(older), len(newer)) + 1)
-        if [row["signature"] for row in older[-size:]]
-        == [row["signature"] for row in newer[:size]]
-    ]
+    return overlap_candidates(older, newer, same=lambda left, right:
+                              _same_message_signature(left["signature"], right["signature"]))
 
 
 def _merge_older_window(older, newer, clipped=()):
@@ -2281,22 +2323,25 @@ def _merge_older_window(older, newer, clipped=()):
             if (
                 row.get("edge") in {"bottom", "both"}
                 and newer
-                and row.get("raw") == newer[0].get("raw")
+                and row.get("comparison_text", row.get("raw")) == newer[0]["signature"][1]
             )
         ]
         if len(anchors) == 1:
             return [*older, *newer], [], None
         return None, [], "message_window_continuity_not_established"
-    if len(candidates) != 1:
+    size = max(candidates)
+    pairs = list(zip(older[-size:], newer[:size], strict=True))
+    if any(left['signature'] != right['signature'] for left, right in pairs) and not unique_overlap_anchor(
+            older, newer, size, same=lambda left, right: _same_message_signature(left['signature'], right['signature'])):
         return [*older, *newer], ["message_revisit_ambiguity"], None
-    size = candidates[0]
-    for previous, current in zip(
-        older[-size:], newer[:size], strict=True
-    ):
-        current["sightings"] = [
-            *previous["sightings"], *current["sightings"]
-        ]
-    return [*older[:-size], *newer], [], None
+    def reconcile(previous, current):
+        sender = previous.get('rendered', {}).get('sender')
+        if sender and not current.get('rendered', {}).get('sender'):
+            current['rendered'] = {**current['rendered'], 'sender': sender}
+            current['signature'] = previous['signature']
+        current['sightings'] = [*previous['sightings'], *current['sightings']]
+        return current
+    return reconcile_overlap(older, newer, size, reconcile), [], None
 
 
 def _enrich_temporal_context(rows, device_temporal_anchor=None):
@@ -2871,6 +2916,36 @@ def _normalize_history_boundary(
     }, observation_id, root, None
 
 
+def _unresolved_clipped_rows(rows, deferred):
+    """Resolve clipped sightings by content and their order among observed rows."""
+    unresolved = []
+    windows = {}
+    for item in deferred:
+        source = item['source']
+        windows.setdefault(source['observation_id'], {})[source['literal_slot']] = item
+    for index, row in enumerate(rows):
+        for sighting in row.get('sightings', ()):
+            if sighting.get('observation_id') in windows:
+                windows[sighting['observation_id']][sighting['literal_slot']] = index
+    for window in windows.values():
+        ordered = [value for _, value in sorted(window.items())]
+        anchors = [(position, value) for position, value in enumerate(ordered) if isinstance(value, int)]
+        for position, item in enumerate(ordered):
+            if isinstance(item, int):
+                continue
+            before = next((anchor for anchor in reversed(anchors) if anchor[0] < position), None)
+            after = next((anchor for anchor in anchors if anchor[0] > position), None)
+            candidates = {anchor[1] + position - anchor[0]
+                          for anchor in (before, after) if anchor is not None}
+            if len(candidates) != 1:
+                unresolved.append(item)
+                continue
+            index = candidates.pop()
+            if not 0 <= index < len(rows) or rows[index].get('signature', (None, None))[1] != item.get('comparison_text', item.get('raw')):
+                unresolved.append(item)
+    return unresolved
+
+
 def _finalize_message_history(
     state,
     rows,
@@ -2893,8 +2968,12 @@ def _finalize_message_history(
         "message_shape_unclassified",
         "attachment_materialize_preinventory_failed",
         "attachment_materialize_inventory_failed",
+        "attachment_materialize_save_action_unavailable",
         "attachment_materialize_no_candidate",
         "attachment_materialize_ambiguous_candidates",
+        "attachment_materialize_download_unavailable",
+        "attachment_materialize_download_incomplete",
+        "attachment_materialize_display_size_mismatch",
         "attachment_materialize_pull_failed",
         "attachment_materialize_size_mismatch",
         "attachment_materialize_postpull_changed",
@@ -2902,6 +2981,9 @@ def _finalize_message_history(
     reason_code = reason_code or next(
         (item for item in limitations if item in significant), None
     )
+    unresolved = _unresolved_clipped_rows(rows, deferred)
+    if unresolved:
+        reason_code = reason_code or "message_clipped_rows_unresolved"
     if reason_code is not None:
         limitations.append(reason_code)
     limitations = list(dict.fromkeys(limitations))
@@ -2917,6 +2999,8 @@ def _finalize_message_history(
         "device_temporal_anchor": device_temporal_anchor,
         "rows": rows,
         "deferred": deferred,
+        "unresolved_deferred_count": len(unresolved),
+        "unresolved_deferred": unresolved,
         "limitations": limitations,
         "representative_action_id": representative_action_id,
         "representative_observation_id": representative_observation_id,
@@ -3069,7 +3153,7 @@ def _acquire_message_history(
             observation_id=observation_id,
             window_index=0,
             state=state,
-        )
+         profile=device_profile(device))
         if parse_reason is not None:
             return None, observation_id, root, parse_reason
         _register_acquired_rows(state, rows)
@@ -3111,7 +3195,7 @@ def _acquire_message_history(
         observation_id=observation_id,
         window_index=0,
         state=state,
-    )
+     profile=device_profile(device))
     if reason is not None:
         return None, observation_id, root, reason
     if not rows:
@@ -3177,7 +3261,7 @@ def _acquire_message_history(
             observation_id=observation_id,
             window_index=window_index,
             state=state,
-        )
+         profile=device_profile(device))
         if reason is not None:
             return None, observation_id, root, reason
         deferred.extend(clipped)
@@ -3378,6 +3462,7 @@ def _write_message_history(
                 ),
                 "limitations": history["limitations"],
                 "deferred": history["deferred"],
+                "unresolved_deferred": history.get("unresolved_deferred", []),
                 "context_rows": context_rows,
                 "ordered_message_refs": [
                     row["message_ref"] for row in messages
@@ -3584,13 +3669,6 @@ def _acquire_scrollable_occurrence(
     )
     if reason is not None:
         return None, observation_id, root, reason
-    if scope_key is not None:
-        seen_chatrooms.add(scope_key)
-    else:
-        ambiguous = state.setdefault("seen_ambiguous_chatrooms", set())
-        if logical_chatroom_id in ambiguous:
-            state["container_revisit_ambiguity"] = True
-        ambiguous.add(logical_chatroom_id)
     history, observation_id, root, reason = _acquire_message_history(
         device,
         state,
@@ -3633,6 +3711,15 @@ def _acquire_scrollable_occurrence(
         return None, return_observation_id, return_root, (
             reason or f"{surface}_list_not_restored"
         )
+    # A finished attempt may retain unavailable attachments as partial; a revisit
+    # must not repeat it. Only remember it after preservation and verified return.
+    if scope_key is not None:
+        seen_chatrooms.add(scope_key)
+    else:
+        ambiguous = state.setdefault("seen_ambiguous_chatrooms", set())
+        if logical_chatroom_id in ambiguous:
+            state["container_revisit_ambiguity"] = True
+        ambiguous.add(logical_chatroom_id)
     return {
         "occurrence_ref": occurrence_ref,
         "container_ref": container_ref,
@@ -3652,21 +3739,24 @@ def _acquire_scrollable_occurrence(
         "source_observation_id": source_observation_id,
         "entry_action_id": click_id,
         "history": {
-            key: history[key]
-            for key in (
-                "status",
-                "reason_code",
-                "latest_boundary",
-                "earliest_boundary",
-                "limitations",
-                "logical_message_count",
-                "message_occurrence_count",
-                "attachment_count",
-                "attachment_materialize_attempts",
-                "attachment_materialize_actions",
-                "attachment_display_fallbacks",
-                "attachment_deferred_count",
-            )
+            "unresolved_deferred_count": history.get("unresolved_deferred_count", 0),
+            **{
+                key: history[key]
+                for key in (
+                    "status",
+                    "reason_code",
+                    "latest_boundary",
+                    "earliest_boundary",
+                    "limitations",
+                    "logical_message_count",
+                    "message_occurrence_count",
+                    "attachment_count",
+                    "attachment_materialize_attempts",
+                    "attachment_materialize_actions",
+                    "attachment_display_fallbacks",
+                    "attachment_deferred_count",
+                )
+            },
         },
         "capture": capture,
         "return_action_id": back_id,
@@ -3676,22 +3766,15 @@ def _acquire_scrollable_occurrence(
     }, return_observation_id, return_root, None
 
 
-def _geometry(occurrences):
-    items = (*occurrences["eligible"], *occurrences["deferred"])
-    if not items:
-        return ()
-    top = min(item["rect"][1] for item in items)
+def _list_signature(page, occurrences):
+    # Content descriptions may gain previews after a visit. Keep the ordered
+    # visible text checkpoint, independent of row size or scroll coordinates.
+    children = list(page["list"])
     return tuple(
-        (
-            item["literal_slot"],
-            (
-                item["rect"][0],
-                item["rect"][1] - top,
-                item["rect"][2],
-                item["rect"][3] - top,
-            ),
-        )
-        for item in items
+        tuple(_norm(node.get("text")) for node in children[item["literal_slot"]].iter()
+              if _owned(node) and _shown(node) and _norm(node.get("text")))
+        for item in sorted((*occurrences["eligible"], *occurrences["deferred"]),
+                           key=lambda item: item["literal_slot"])
     )
 
 
@@ -3702,11 +3785,12 @@ def _safe_occurrences(page, page_number, selector_prefix="telegram.chat-row"):
         return None, "candidate_geometry_invalid"
 
 
-def _exact_display_name_occurrence(page, page_number, display_name):
+def _exact_display_name_occurrence(page, page_number, display_name, *, occurrences=None):
     target = _norm(display_name)
     if page is None or not target:
         return None, "target_container_not_found"
-    occurrences = _row_occurrences(page, page_number)
+    if occurrences is None:
+        occurrences = _row_occurrences(page, page_number)
     children = list(page["list"])
     matches = []
     for item in occurrences["eligible"]:
@@ -3724,11 +3808,10 @@ def _exact_display_name_occurrence(page, page_number, display_name):
                     )
         if target in labels:
             matches.append(item)
-    if not matches:
-        return None, "target_container_not_found"
-    if len(matches) != 1:
-        return None, "target_container_ambiguous"
-    return matches[0], None
+    try:
+        return one_candidate(matches), None
+    except ValueError as error:
+        return None, 'target_container_not_found' if str(error) == 'unavailable' else 'target_container_ambiguous' 
 
 
 def _enumerate_containers(
@@ -3756,10 +3839,22 @@ def _enumerate_containers(
         "seen_chatrooms": set(),
         "seen_ambiguous_chatrooms": set(),
         "container_revisit_ambiguity": False,
+        "list_comparisons": 0,
     }
     containers = []
     deferred = []
     limitations = []
+
+    def retain_comparison(kind, before_id, after_id, **details):
+        if outputs is None:
+            return
+        reference = _next_id(state, "list_comparisons", f"list-{kind}")
+        outputs.write_json(
+            artifact_id=reference, output_kind="audit_record", artifact_class="chatroom_list",
+            comparison_ref=reference, action_id=state["last_action_id"], observation_id=after_id,
+            value={"record_kind": f"chat_list_{kind}_comparison",
+                   "before_source_snapshot_id": f"telegram-snapshot:{before_id}",
+                   "after_source_snapshot_id": f"telegram-snapshot:{after_id}", **details})
 
     observation_id, root, reason = _observe(device, state)
     page = _default_list(device, root)
@@ -3811,13 +3906,17 @@ def _enumerate_containers(
         limitations.append("container_revisit_ambiguity")
 
     page_number = 1
+    restarts = 0
     while True:
         occurrences, reason = _safe_occurrences(page, page_number)
         if reason is not None:
             return _failed_report(
                 target_ref, reason, state, containers, deferred, limitations
             )
-        baseline = _geometry(occurrences)
+        baseline = _list_signature(page, occurrences)
+        current = occurrences
+        page_chatrooms = set()
+        restart = False
         deferred = [
             {
                 "surface": "default",
@@ -3831,30 +3930,19 @@ def _enumerate_containers(
             if page_number == 1 or item["edge"] != "top"
         ]
 
-        for expected in occurrences["eligible"]:
+        def reacquire(expected):
             current, reason = _safe_occurrences(page, page_number)
             if reason is not None:
-                return _failed_report(
-                    target_ref, reason, state, containers, deferred, limitations
-                )
-            if _geometry(current) != baseline:
-                return _failed_report(
-                    target_ref, "list_changed_after_return",
-                    state, containers, deferred, limitations,
-                )
-            item = next(
-                (
-                    candidate
-                    for candidate in current["eligible"]
-                    if candidate["literal_slot"] == expected["literal_slot"]
-                ),
-                None,
-            )
-            if item is None:
-                return _failed_report(
-                    target_ref, "list_changed_after_return",
-                    state, containers, deferred, limitations,
-                )
+                return current, None, reason
+            if _list_signature(page, current) != baseline:
+                return current, None, "list_changed_after_return"
+            item = next(matching_candidates(current["eligible"], expected,
+                                            key=itemgetter("literal_slot")), None)
+            return current, item, None if item is not None else "list_changed_after_return"
+        for current, item, reason in visit_candidates(occurrences["eligible"], reacquire):
+            if reason is not None:
+                return _failed_report(target_ref, reason, state, containers, deferred, limitations)
+            before_observation_id = observation_id
             if outputs is None:
                 record, observation_id, root, reason = _enter_occurrence(
                     device,
@@ -3887,13 +3975,50 @@ def _enumerate_containers(
                     limitations.append("container_history_partial")
             if state["container_revisit_ambiguity"]:
                 limitations.append("container_revisit_ambiguity")
+            identified_id = (
+                record.get("logical_chatroom_id")
+                if record.get("identity_status") == "identified" or record.get("revisit")
+                else None
+            )
+            repeated_in_page = identified_id is not None and identified_id in page_chatrooms
+            if identified_id is not None:
+                page_chatrooms.add(identified_id)
+            before_return = _list_signature(page, current)
             page = _default_list(device, root)
             current, reason = _safe_occurrences(page, page_number)
-            if page is None or reason is not None or _geometry(current) != baseline:
+            if page is None or reason is not None:
                 return _failed_report(
                     target_ref, "list_changed_after_return",
                     state, containers, deferred, limitations,
                 )
+            after_return = _list_signature(page, current)
+            if repeated_in_page or after_return != before_return:
+                retain_comparison("return", before_observation_id, observation_id,
+                                  selected_slot=item["literal_slot"], repeated_in_page=repeated_in_page,
+                                  basis="ordered_xml_text",
+                                  labels_equal=before_return == after_return,
+                                  before_signature=before_return, after_signature=after_return)
+                limitations.append("list_changed_after_return")
+                restart = True
+                break
+            baseline = _list_signature(page, current)
+
+        if restart:
+            restarts += 1
+            if restarts > state["stagnation_rounds"]:
+                return _failed_report(
+                    target_ref, "list_changed_after_return",
+                    state, containers, deferred, limitations,
+                )
+            observation_id, root, page, reason = _establish_list_top(
+                device, state, observation_id, root, page
+            )
+            if reason is not None:
+                return _failed_report(
+                    target_ref, reason, state, containers, deferred, limitations
+                )
+            page_number = 1
+            continue
 
         if page["end_sentinel_top"] is not None:
             last_action_id = state.get("last_action_id")
@@ -4151,8 +4276,10 @@ def collect(device, outputs, target_ref):
             report.get("top_boundary", {}).get("established")
             and report.get("bottom_boundary", {}).get("established")
             and not report.get("deferred")
-            and all(item.get("history", {}).get("earliest_boundary", {}).get("established")
-                    and item.get("history", {}).get("latest_boundary", {}).get("established")
+            and not any(item.get("history", {}).get("unresolved_deferred_count", 0)
+                        for item in report.get("containers", ()))
+            and all((item.get("history", {}).get("earliest_boundary") or {}).get("established")
+                    and (item.get("history", {}).get("latest_boundary") or {}).get("established")
                     for item in report.get("containers", ()))
         )
         for target_id in ("telegram.conversations", "telegram.attachments"):

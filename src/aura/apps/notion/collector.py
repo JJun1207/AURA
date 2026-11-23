@@ -1,6 +1,9 @@
 """Notion 0.6.4030 account and workspace context parsing."""
 
 from __future__ import annotations
+from ...collection import display_text, visit_candidates, display_pattern, stability_probe, matching_nodes
+from ...parsing import node_values
+
 
 import re
 import xml.etree.ElementTree as ET
@@ -8,9 +11,12 @@ from collections import Counter
 from collections.abc import Mapping
 from pathlib import PurePosixPath
 
-from ...models import ActionRef, Route
+from ...models import AcquisitionStatus, ActionRef, ProcedureStatus, Route
 from .exports import ExportCollectionError, collect_workspace_exports
-from .pages import PageCollectionError, collect_workspace_pages
+from .pages import (
+    PageCollectionError, collect_workspace_pages, collect_workspace_inventory,
+    _page_loading_visible,
+)
 from .support import (
     PACKAGE,
     NotionCollectorError,
@@ -27,19 +33,13 @@ from .support import (
 
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _INVITE_LINK = re.compile(r"^https://app\.notion\.com/invite/[^\s]+$")
-_PAGE_ROW_ID = re.compile(
-    r"^home-tab\.(?:private|shared|teamspaces?)\.page-row\."
-    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
-    r"[89ab][0-9a-f]{3}-[0-9a-f]{12})$",
-    re.IGNORECASE,
-)
 
 
 def _parse_workspace_menu(root: ET.Element) -> dict[str, bool]:
     found = [
         node.get("resource-id", "")
         for node in root.iter()
-        if _onscreen(node)
+        if _onscreen(node, root)
         and node.get("clickable") == "true"
         and node.get("enabled") == "true"
         and node.get("resource-id") in {
@@ -56,12 +56,12 @@ def _parse_workspace_menu(root: ET.Element) -> dict[str, bool]:
     }
 
 
-def _workspace_page_ids(root: ET.Element) -> frozenset[str]:
+def _workspace_page_ids(root: ET.Element, profile) -> frozenset[str]:
     return frozenset(
-        match.group(1).lower()
+        match.group(2).lower()
         for node in root.iter()
-        if _onscreen(node)
-        and (match := _PAGE_ROW_ID.fullmatch(
+        if _onscreen(node, root)
+        and (match := display_pattern(profile, 'page_row', flags=re.IGNORECASE).fullmatch(
             node.get("resource-id", "")
         )) is not None
     )
@@ -70,19 +70,20 @@ def _workspace_page_ids(root: ET.Element) -> frozenset[str]:
 def _parse_workspace_home(
     root: ET.Element,
     *,
+    profile,
     previous_page_ids: frozenset[str] | None = None,
     expected_page_ids: frozenset[str] | None = None,
 ) -> frozenset[str]:
     homes = [
         node
         for node in root.iter()
-        if _onscreen(node)
+        if _onscreen(node, root)
         and node.get("resource-id") == "vision_tab_Home"
         and node.get("selected") == "true"
     ]
     if len(homes) != 1:
         raise NotionCollectorError("Notion Home is unavailable")
-    page_ids = _workspace_page_ids(root)
+    page_ids = _workspace_page_ids(root, profile=profile)
     if previous_page_ids and page_ids == previous_page_ids:
         raise NotionCollectorError(
             "workspace Home content did not change"
@@ -98,7 +99,7 @@ def _selected_marker(row: ET.Element) -> bool:
     left, _, right, _ = _bounds(row)
     threshold = left + (right - left) * 0.75
     return any(
-        _onscreen(child)
+        _onscreen(child, row)
         and child.get("class") == "android.view.View"
         and child.get("clickable") != "true"
         and not child.get("text", "").strip()
@@ -109,13 +110,13 @@ def _selected_marker(row: ET.Element) -> bool:
     )
 
 
-def _parse_switcher(root: ET.Element) -> dict[str, object]:
+def _parse_switcher(root: ET.Element, profile) -> dict[str, object]:
     headings = [
         node
         for node in root.iter()
-        if _onscreen(node)
+        if _onscreen(node, root)
         and node.get("class") == "android.widget.TextView"
-        and node.get("text", "").strip() == "Accounts"
+        and node.get("text", "").strip() == display_text(profile, 'accounts')
     ]
     if len(headings) != 1:
         raise NotionCollectorError("account switcher is unavailable")
@@ -123,7 +124,7 @@ def _parse_switcher(root: ET.Element) -> dict[str, object]:
     emails = [
         (_bounds(node)[1], node.get("text", "").strip())
         for node in root.iter()
-        if _onscreen(node)
+        if _onscreen(node, root)
         and node.get("class") == "android.widget.TextView"
         and _EMAIL.fullmatch(node.get("text", "").strip())
     ]
@@ -134,25 +135,19 @@ def _parse_switcher(root: ET.Element) -> dict[str, object]:
     rows = []
     for node in root.iter():
         if (
-            not _onscreen(node)
+            not _onscreen(node, root)
             or node.get("class") != "android.view.View"
             or node.get("clickable") != "true"
             or node.get("enabled") != "true"
         ):
             continue
-        texts = [
-            child.get("text", "").strip()
-            for child in node
-            if _onscreen(child)
-            and child.get("class") == "android.widget.TextView"
-            and child.get("text", "").strip()
-        ]
+        texts = node_values(child for child in node if _onscreen(child, root) and child.get('class') == 'android.widget.TextView')
         if (
             len(texts) not in {1, 2}
             or node.get("resource-id", "").strip()
             or _bounds(node)[2] - _bounds(node)[0] <= 800
             or any(
-                text in {"New workspace", "Add an account", "Log out all"}
+                text in {display_text(profile, key) for key in ('new_workspace', 'add_account', 'logout_all')}
                 for text in texts
             )
         ):
@@ -216,10 +211,12 @@ def _parse_switcher(root: ET.Element) -> dict[str, object]:
 
 
 def _parse_members(root: ET.Element) -> dict[str, object]:
+    if _page_loading_visible(root):
+        raise NotionCollectorError("notion_members_loading")
     headings = [
         node
         for node in root.iter()
-        if _onscreen(node)
+        if _onscreen(node, root)
         and node.get("class") == "android.widget.TextView"
         and node.get("text", "").strip() == "Members"
     ]
@@ -228,14 +225,14 @@ def _parse_members(root: ET.Element) -> dict[str, object]:
     links = [
         node.get("text", "").strip()
         for node in root.iter()
-        if _onscreen(node)
+        if _onscreen(node, root)
         and node.get("class") == "android.widget.EditText"
         and _INVITE_LINK.fullmatch(node.get("text", "").strip())
     ]
     online_requirements = [
         node
         for node in root.iter()
-        if _onscreen(node)
+        if _onscreen(node, root)
         and node.get("class") == "android.widget.TextView"
         and node.get("text", "").strip()
         == "Please go online to manage settings."
@@ -243,7 +240,7 @@ def _parse_members(root: ET.Element) -> dict[str, object]:
     member_emails = [
         node
         for node in root.iter()
-        if _onscreen(node)
+        if _onscreen(node, root)
         and node.get("class") == "android.widget.TextView"
         and _EMAIL.fullmatch(node.get("text", "").strip())
     ]
@@ -273,7 +270,7 @@ def _parse_members(root: ET.Element) -> dict[str, object]:
         roles = {
             node.get("text", "").strip()
             for node in row.iter()
-            if _onscreen(node)
+            if _onscreen(node, root)
             and node.get("class") == "android.widget.Button"
             and node.get("text", "").strip()
         }
@@ -283,7 +280,7 @@ def _parse_members(root: ET.Element) -> dict[str, object]:
         names = [
             node.get("text", "").strip()
             for node in row.iter()
-            if _onscreen(node)
+            if _onscreen(node, root)
             and node.get("class") == "android.widget.TextView"
             and node.get("text", "").strip() not in {email, role}
         ]
@@ -292,7 +289,7 @@ def _parse_members(root: ET.Element) -> dict[str, object]:
         avatars = {
             node.get("content-desc", "").strip()
             for node in row.iter()
-            if _onscreen(node)
+            if _onscreen(node, root)
             and node.get("class") in {
                 "android.widget.Image",
                 "android.widget.ImageView",
@@ -349,7 +346,7 @@ def _open_switcher(
         context,
         f"observation-{observation_label}account-switcher-{sequence:06d}",
         switch_action,
-        _parse_switcher,
+        lambda root: _parse_switcher(root, context.app_profile),
         f"{observation_label}workspace-switcher-{sequence:06d}",
     )
     return switch_action, observation, observation["parsed"]
@@ -400,6 +397,7 @@ def _open_members(
             members_action,
             _parse_members,
             f"members-{sequence:06d}",
+            record_kind="notion_workspace_members",
         )
     except NotionCollectorError:
         if not context.ui.wait_for(
@@ -410,36 +408,15 @@ def _open_members(
         # real new attempt on the same workspace, before its next UI action.
         from .support import item_attempt
         item_attempt(context, {"workspace_ref": workspace_ref}, retention=False)
-        actual_page_ids = _parse_workspace_home(
-            ET.fromstring(context.device.hierarchy())
-        )
-        recovered = actual_page_ids != expected_page_ids
+        _, _, inventory = _open_switcher(context, sequence, label="recover_members")
+        target = next(item for item in inventory["workspaces"]
+                      if _workspace_key(item) == _workspace_key(workspace))
+        recovered = not target["initial_selected"]
         if recovered:
-            _, _, inventory = _open_switcher(
-                context,
-                sequence,
-                label="recover_members",
-            )
-            target = next(
-                item
-                for item in inventory["workspaces"]
-                if _workspace_key(item) == _workspace_key(workspace)
-            )
-            recovery_action = context.ui.click_bounds(
-                f"notion_recover_members_select_workspace_{sequence:06d}",
-                target["bounds"],
-                context={"workspace_ref": workspace_ref},
-            )
-            _observe(
-                context,
-                f"observation-members-workspace-recovery-{sequence:06d}",
-                recovery_action,
-                lambda root: _parse_workspace_home(
-                    root,
-                    expected_page_ids=expected_page_ids,
-                ),
-                f"members-workspace-recovery-{sequence:06d}",
-            )
+            _, _, _, _, verified = _select_workspace(context, target, sequence)
+            _current_workspace(verified, workspace)
+        _close_to_home(context, f"notion_close_members_recovery_{sequence:06d}",
+                       workspace_ref=workspace_ref)
         retry_menu_action = _click(
             context,
             f"notion_retry_workspace_menu_members_{sequence:06d}",
@@ -453,6 +430,8 @@ def _open_members(
             _parse_workspace_menu,
             f"workspace-menu-members-retry-{sequence:06d}",
         )
+        item_attempt(context, {"workspace_ref": workspace_ref},
+                     record_kind="notion_workspace_members", retention=False)
         members_action = _click(
             context,
             f"notion_retry_members_{sequence:06d}",
@@ -465,6 +444,7 @@ def _open_members(
             members_action,
             _parse_members,
             f"members-{sequence:06d}",
+            record_kind="notion_workspace_members",
         )
     else:
         recovered = False
@@ -475,7 +455,6 @@ def _workspace_key(workspace: Mapping[str, object]) -> tuple[object, ...]:
     return (
         workspace["account_email"],
         workspace["display_name"],
-        workspace["plan_label"],
         workspace["same_name_occurrence"],
     )
 
@@ -502,28 +481,57 @@ def _workspace_directory(workspace: Mapping[str, object]) -> str:
     return f"notion/workspaces/{value}"
 
 
-def _select_workspace(
-    context,
-    workspace: Mapping[str, object],
-    sequence: int,
-    previous_page_ids: frozenset[str] | None,
-) -> tuple[ActionRef, frozenset[str]]:
-    action = context.ui.click_bounds(
-        f"notion_select_workspace_{sequence:06d}",
-        workspace["bounds"],
-        context={"workspace_ref": workspace["workspace_ref"]},
-    )
-    observation = _observe(
-        context,
-        f"observation-workspace-selection-{sequence:06d}",
-        action,
-        lambda root: _parse_workspace_home(
-            root,
-            previous_page_ids=previous_page_ids,
-        ),
-        f"workspace-selection-{sequence:06d}",
-    )
-    return action, observation["parsed"]
+def _select_workspace(context, workspace: Mapping[str, object], sequence: int,
+                      previous_page_ids: frozenset[str] | None = None):
+    """Select, then verify the workspace identity; retry one unaccepted click."""
+    if workspace["initial_selected"]:
+        action = context.journal.record_action(f"notion_verify_current_workspace_{sequence:06d}",
+            status="success", context={"workspace_ref": workspace["workspace_ref"]})
+        observation = _observe(context, f"observation-current-workspace-{sequence:06d}", action,
+                               lambda root: _parse_switcher(root, context.app_profile))
+        _current_workspace(observation["parsed"], workspace)
+        return action, previous_page_ids, action, observation, observation["parsed"]
+    target = workspace
+    for attempt in range(2):
+        action = context.ui.click_bounds(
+            f"notion_select_workspace_{sequence:06d}_{attempt + 1}",
+            target["bounds"],
+            context={"workspace_ref": workspace["workspace_ref"]},
+        )
+        if previous_page_ids and not target["initial_selected"]:
+            changed, _ = stability_probe(
+                lambda: ET.fromstring(context.device.hierarchy()),
+                key=lambda root: _parse_workspace_home(root, profile=context.app_profile,
+                                                       previous_page_ids=previous_page_ids),
+                retry_errors=(NotionCollectorError,),
+            )
+            # Give the Home content time to load. A timeout still proceeds to
+            # the existing identity check instead of deciding selection here.
+            context.ui.wait_until(changed)
+        home = _observe(
+            context, f"observation-workspace-selection-{sequence:06d}-{attempt + 1}",
+            action, lambda root: _parse_workspace_home(root, profile=context.app_profile),
+            f"workspace-selection-{sequence:06d}-{attempt + 1}",
+        )
+        verify_action, observation, inventory = _open_switcher(
+            context, sequence, label=f"verify_selection_{attempt + 1}"
+        )
+        try:
+            _current_workspace(inventory, workspace)
+        except NotionCollectorError:
+            if attempt == 0:
+                _retain_pair(context, f"{_workspace_directory(workspace)}/selection-retry",
+                    observation, verify_action,
+                    {"workspace_ref": workspace["workspace_ref"],
+                     "reason_code": "notion_workspace_click_not_accepted",
+                     "selection_action_id": action.event_id})
+                matches = [row for row in inventory["workspaces"]
+                           if _workspace_key(row) == _workspace_key(workspace)]
+                if len(matches) == 1:
+                    target = matches[0]
+                    continue
+        # The caller retains the final switcher and rejects a wrong marker.
+        return action, home["parsed"], verify_action, observation, inventory
 
 
 def _close_to_home(
@@ -532,27 +540,38 @@ def _close_to_home(
     *,
     expected_page_ids: frozenset[str] | None = None,
     **linked,
-) -> ActionRef:
-    action = context.ui.back(
-        action_name,
-        expected=_selector(context, "notion.home"),
-        context=dict(linked),
-    )
-    _observe(
+):
+    root = ET.fromstring(context.device.hierarchy())
+    headings = matching_nodes(root, PACKAGE, {
+        "class": "android.widget.TextView",
+        "text": _selector(context, "notion.members")["text"],
+    }, visible=_onscreen)
+    if len(headings) > 1:
+        raise NotionCollectorError("notion_members_header_ambiguous")
+    buttons = []
+    if headings:
+        header = next(parent for parent in root.iter() if headings[0] in list(parent))
+        preceding = list(header)[:list(header).index(headings[0])]
+        buttons = [node for node in preceding if _onscreen(node, root)
+                   and node.get("class") == "android.widget.Button"
+                   and node.get("clickable") == node.get("enabled") == "true"]
+    if len(buttons) > 1:
+        raise NotionCollectorError("notion_members_back_ambiguous")
+    if buttons:
+        action = context.ui.click_bounds(action_name, _bounds(buttons[0]),
+            context={**linked, "navigation_source": "members_header_back"})
+    else:
+        # Preserve the existing path for other surfaces and XML without this header.
+        action = context.ui.back(action_name, expected=_selector(context, "notion.home"),
+                                 context=dict(linked))
+    observation = _observe(
         context,
         f"observation-{action_name}",
         action,
-        (
-            None
-            if expected_page_ids is None
-            else lambda root: _parse_workspace_home(
-                root,
-                expected_page_ids=expected_page_ids,
-            )
-        ),
+        lambda root: _parse_workspace_home(root, profile=context.app_profile),
         f"{action_name}-home",
     )
-    return action
+    return action, observation
 
 
 def _restore_initial(
@@ -563,38 +582,36 @@ def _restore_initial(
 ) -> tuple[bool, ActionRef | None]:
     home = _selector(context, "notion.home")
     if not context.ui.wait_for(home, timeout=0):
+        root = ET.fromstring(context.device.hierarchy())
+        known_workspace_surface = False
+        for parser in (_parse_members, _parse_workspace_menu,
+                       lambda r: _parse_switcher(r, context.app_profile)):
+            try:
+                parser(root)
+                known_workspace_surface = True
+            except NotionCollectorError:
+                pass
+        if not known_workspace_surface:
+            return False, None
         try:
-            _close_to_home(
-                context,
-                f"notion_recover_home_{sequence:06d}",
-                workspace_ref=current_ref,
-            )
+            _close_to_home(context, f"notion_recover_home_{sequence:06d}", workspace_ref=current_ref)
         except Exception:
             return False, None
     initial_ref = str(initial_workspace["workspace_ref"])
     try:
-        previous_page_ids = _parse_workspace_home(
-            ET.fromstring(context.device.hierarchy())
-        )
         sequence += 1
+        previous_page_ids = _parse_workspace_home(
+            ET.fromstring(context.device.hierarchy()), profile=context.app_profile)
         _, _, inventory = _open_switcher(context, sequence)
         target = next(
             item
             for item in inventory["workspaces"]
             if _workspace_key(item) == _workspace_key(initial_workspace)
         )
-        restore_action, restored_page_ids = _select_workspace(
-            context,
-            target,
-            sequence,
-            (
-                None
-                if current_ref == initial_ref
-                else previous_page_ids
-            ),
+        restore_action, restored_page_ids, _, _, restored_inventory = _select_workspace(
+            context, target, sequence, previous_page_ids,
         )
         sequence += 1
-        _, _, restored_inventory = _open_switcher(context, sequence)
         _current_workspace(restored_inventory, initial_workspace)
         _close_to_home(
             context,
@@ -604,15 +621,6 @@ def _restore_initial(
         )
         return True, restore_action
     except Exception:
-        if not context.ui.wait_for(home, timeout=0):
-            try:
-                _close_to_home(
-                    context,
-                    f"notion_recover_restore_home_{sequence:06d}",
-                    workspace_ref=initial_ref,
-                )
-            except Exception:
-                pass
         return False, None
 
 
@@ -622,18 +630,28 @@ def collect(
     route: Route,
 ) -> dict[str, object]:
     route = Route(route)
-    context.begin_identification("notion.content")
+    context.begin_identification("notion.inventory")
     from .support import item_attempt
-    item_attempt(context, {"target_ref": target_ref})
+    attempt_id = item_attempt(context, {"target_ref": target_ref})
     if not context.ui.wait_for(_selector(context, "notion.home")):
+        action = context.linked_action("observe_notion_home_unavailable", attempt_id,
+                                       context={"target_ref": target_ref})
+        context.retain_observation("notion/diagnostics/home-unavailable",
+            context.device.screenshot(), context.device.hierarchy().encode("utf-8"),
+            attempt_id=attempt_id, action=action)
+        context.finish_attempt(attempt_id, ProcedureStatus.INTERRUPTED, AcquisitionStatus.NOT_ACQUIRED,
+            reason="notion_home_unavailable", action=action,
+            observation_id=context.observations[-1].observation_id)
         return {
             "status": "failed",
             "reason_code": "notion_home_unavailable",
             "target_ref": target_ref,
+            "_action": action,
         }
     try:
         current_page_ids = _parse_workspace_home(
-            ET.fromstring(context.device.hierarchy())
+            ET.fromstring(context.device.hierarchy()),
+            profile=context.app_profile,
         )
         initial_action, initial_observation, initial = _open_switcher(
             context, 1
@@ -671,7 +689,7 @@ def collect(
         },
     )
     context.register_collection_records(
-        "notion.content", account_artifact, initial["accounts"],
+        "notion.inventory", account_artifact, initial["accounts"],
         item_type="account", record_key="accounts",
     )
     initial_ref = str(initial["initial_workspace_ref"])
@@ -793,36 +811,23 @@ def collect(
         )
 
     try:
-        for target in initial["workspaces"]:
+        def reacquire(target):
+            return target, next(item for item in current_inventory["workspaces"]
+                                if _workspace_key(item) == _workspace_key(target))
+        for target, current_target in visit_candidates(initial["workspaces"], reacquire):
             item_attempt(context, {"target_ref": target_ref, "workspace_ref": target["workspace_ref"]})
             failed_workspace_ref = str(target["workspace_ref"])
             failure_reason = "notion_workspace_selection_failed"
-            current_target = next(
-                item
-                for item in current_inventory["workspaces"]
-                if _workspace_key(item) == _workspace_key(target)
-            )
-            selection_action, current_page_ids = _select_workspace(
-                context,
-                current_target,
-                sequence,
-                (
-                    None
-                    if current_ref == target["workspace_ref"]
-                    else current_page_ids
-                ),
+            (selection_action, current_page_ids, verify_action,
+             verify_observation, verified_inventory) = _select_workspace(
+                context, current_target, sequence, current_page_ids,
             )
             selection_count += 1
             if current_ref != target["workspace_ref"]:
                 transition_count += 1
             current_ref = str(target["workspace_ref"])
             sequence += 1
-
             failure_reason = "notion_workspace_selection_unverified"
-            verify_action, verify_observation, verified_inventory = (
-                _open_switcher(context, sequence)
-            )
-            verified = _current_workspace(verified_inventory, target)
             selection_source = _retain_pair(
                 context,
                 (
@@ -840,72 +845,78 @@ def collect(
             selection_source["selection_action_id"] = (
                 selection_action.event_id
             )
-            _close_to_home(
+            verified = _current_workspace(verified_inventory, target)
+            home_entry = _close_to_home(
                 context,
                 f"notion_close_account_switcher_{sequence:06d}",
                 expected_page_ids=current_page_ids,
                 workspace_ref=target["workspace_ref"],
             )
 
-            failure_reason = "notion_members_context_ambiguous"
-            (
-                members_action,
-                members_observation,
-                members,
-                members_context_recovered,
-            ) = _open_members(
-                context,
-                sequence,
-                target,
-                current_page_ids,
-            )
-            if members_context_recovered:
-                selection_count += 1
-                transition_count += 1
-            members_source = _retain_pair(
-                context,
-                f"{_workspace_directory(target)}/members",
-                members_observation,
-                members_action,
-                {
+            members_source = None
+            members = {"members": [], "acquisition_status": "not_attempted",
+                       "reason_code": "profile_environment_excluded"}
+            if context.target_enabled("notion.members"):
+                context.begin_identification("notion.members")
+                failure_reason = "notion_members_context_ambiguous"
+                (
+                    members_action,
+                    members_observation,
+                    members,
+                    members_context_recovered,
+                ) = _open_members(
+                    context,
+                    sequence,
+                    target,
+                    current_page_ids,
+                )
+                if members_context_recovered:
+                    selection_count += 1
+                    transition_count += 1
+                members_source = _retain_pair(
+                    context,
+                    f"{_workspace_directory(target)}/members",
+                    members_observation,
+                    members_action,
+                    {
+                        "target_ref": target_ref,
+                        "workspace_ref": target["workspace_ref"],
+                    },
+                )
+                members_record = {
+                    "schema_version": "1.0",
+                    "record_kind": "notion_workspace_members",
                     "target_ref": target_ref,
                     "workspace_ref": target["workspace_ref"],
-                },
-            )
-            members_record = {
-                "schema_version": "1.0",
-                "record_kind": "notion_workspace_members",
-                "target_ref": target_ref,
-                "workspace_ref": target["workspace_ref"],
-                "member_count": len(members["members"]),
-                **members,
-                "source": members_source,
-            }
-            _write_json(
-                context,
-                f"{_workspace_directory(target)}/members.json",
-                members_record,
-                members_action,
-                {
-                    "target_ref": target_ref,
-                    "workspace_ref": target["workspace_ref"],
-                    "observation_id": members_source["observation_id"],
-                },
-            )
-            total_members += len(members["members"])
-            if members["acquisition_status"] == "unavailable":
-                members_unavailable_workspace_refs.append(
-                    str(target["workspace_ref"])
+                    "member_count": len(members["members"]),
+                    **members,
+                    "source": members_source,
+                }
+                _write_json(
+                    context,
+                    f"{_workspace_directory(target)}/members.json",
+                    members_record,
+                    members_action,
+                    {
+                        "target_ref": target_ref,
+                        "workspace_ref": target["workspace_ref"],
+                        "observation_id": members_source["observation_id"],
+                    },
                 )
-                members_partial_reason = (
-                    members_partial_reason or members["reason_code"]
+                total_members += len(members["members"])
+                if members["acquisition_status"] == "unavailable":
+                    members_unavailable_workspace_refs.append(
+                        str(target["workspace_ref"])
+                    )
+                    members_partial_reason = (
+                        members_partial_reason or members["reason_code"]
+                    )
+                home_entry = _close_to_home(
+                    context,
+                    f"notion_close_members_{sequence:06d}",
+                    expected_page_ids=current_page_ids,
+                    workspace_ref=target["workspace_ref"],
                 )
-            _close_to_home(
-                context,
-                f"notion_close_members_{sequence:06d}",
-                expected_page_ids=current_page_ids,
-                workspace_ref=target["workspace_ref"],
-            )
 
             if route is Route.EXPORT:
                 failure_reason = "notion_export_collection_failed"
@@ -915,6 +926,7 @@ def collect(
                     target,
                     _workspace_directory(target),
                     target_ref,
+                    entry=home_entry,
                 )
                 total_discovered_exports += int(
                     payload_report["discovered_top_level_count"]
@@ -931,12 +943,17 @@ def collect(
                 )
             else:
                 failure_reason = "notion_page_collection_failed"
-                context.begin_identification("notion.attachments")
-                payload_report = collect_workspace_pages(
+                detailed_content = context.target_enabled("notion.content")
+                for target_id in ("notion.content", "notion.attachments"):
+                    if context.target_enabled(target_id):
+                        context.begin_identification(target_id)
+                collect_pages = collect_workspace_pages if detailed_content else collect_workspace_inventory
+                payload_report = collect_pages(
                     context,
                     target,
                     _workspace_directory(target),
                     target_ref,
+                    entry=home_entry,
                 )
                 total_pages += int(payload_report["page_count"])
                 total_database_count += int(
@@ -1031,7 +1048,8 @@ def collect(
             workspace_records.append(workspace_record)
             if target is not initial["workspaces"][-1]:
                 current_page_ids = _parse_workspace_home(
-                    ET.fromstring(context.device.hierarchy())
+                    ET.fromstring(context.device.hierarchy()),
+                    profile=context.app_profile,
                 )
                 sequence += 1
                 _, _, current_inventory = _open_switcher(
@@ -1143,12 +1161,14 @@ def collect(
         }
 
     write_workspace_summary(restored)
-    context.finish_identification("notion.content", completion_condition="all_workspaces_visited" if not payload_partial_reason else None,
-                                  reason=payload_partial_reason)
-    payload_target = "notion.export" if route is Route.EXPORT else "notion.attachments"
-    current = next(record for record in context.identifications if record.target_id == payload_target)
-    if current.started_at is not None:
-        context.finish_identification(payload_target, completion_condition="all_workspaces_visited" if not payload_partial_reason else None, reason=payload_partial_reason)
+    for record in context.identifications:
+        if record.started_at is None or record.ended_at is not None:
+            continue
+        reason = (members_partial_reason if record.target_id == "notion.members"
+                  else None if record.target_id == "notion.inventory"
+                  else payload_partial_reason)
+        context.finish_identification(record.target_id,
+            completion_condition="all_workspaces_visited" if not reason else None, reason=reason)
     return {
         "status": (
             "partial" if payload_partial_reason or members_partial_reason

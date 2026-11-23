@@ -23,6 +23,7 @@ def collect(context: RunContext) -> Outcome:
         'whatsapp.conversations': ('whatsapp.parse_message_window', {'identity_basis': 'chat_and_ordered_message_occurrence', 'merge': 'adjacent_window_overlap'}),
         'whatsapp.attachments': ('whatsapp.visible_media_occurrences', {'kinds': ['photo', 'video'], 'identity_basis': 'chat_and_attachment_ref'}),
         'whatsapp.chat_export': ('whatsapp.chat_export_scope', {'identity_basis': 'declared_chat_or_active_list_ordinal', 'delivery': 'bluetooth', 'extension': '.zip'}),
+        'whatsapp.export_summary': ('whatsapp.active_export_summary', {'identity_basis': 'active_list_ordinal', 'surface': 'active_chat_list'}),
     })
     target = context.base_context["condition"].get("target")
     route = context.base_context["route"]

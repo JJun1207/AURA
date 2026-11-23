@@ -1,31 +1,51 @@
 """Notesnook 3.4.5 local-workspace export."""
 
 from __future__ import annotations
+from ...collection import (
+    seek_window,
+    poll_samples,
+    one_candidate,
+    matching_candidates,
+    pending_candidates,
+    iter_windows,
+    visit_candidates,
+    visit_item,
+    content_signature,
+    display_pattern,
+    device_profile,
+    display_text,
+    field_id,
+    overlap_candidates,
+    ordered_candidate,
+)
+from ...parsing import (
+    labelled_values,
+    parse_bounds,
+    node_values,
+    read_rows,
+    parsing_spec,
+    contains_bounds as _contains,
+    overlaps_bounds as _overlaps,
+)
+
+from ...artifacts import changed_inventory
+
+
+from operator import itemgetter
 
 import hashlib
 import re
 import xml.etree.ElementTree as ET
 from pathlib import PurePosixPath
 
-from .adapter import DOCUMENTS_PACKAGE, PACKAGE
+from .adapter import ANDROID_DOCUMENTS_PACKAGE, DOCUMENTS_PACKAGE, PACKAGE, PACKAGES
 
 
-_BOUNDS = re.compile(r"^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$")
-_SELECTION_COUNT = re.compile(r"^(\d+) selected$")
-_EXPORTED_COUNT = re.compile(r"^(\d+) notes exported$")
-_EXPORTED_FILE = re.compile(r"^Notes exported as (.+\.zip) successfully$")
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_HISTORY_LABEL = re.compile(
-    r"^\d{2}-\d{2}-\d{4} .+ -  .+, .+$"
-)
-_ATTACHMENT_ROW = re.compile(
-    r"^([^,]+), (.+), File size: (.+)$"
-)
 _MIME_TYPE = re.compile(r"^[^/\s]+/[^/\s]+$")
 _DISPLAYED_SIZE = re.compile(r"^\d+(?:\.\d+)? [KMGT]?B$")
 _NOTE_COUNT = re.compile(r"^\d+ notes?$")
 _HASH_FRAGMENT = re.compile(r"^[0-9a-fA-F]{8,}$")
-_WORD_COUNT = re.compile(r"^(\d+) words?$", re.IGNORECASE)
 
 
 class NotesnookCollectorError(RuntimeError):
@@ -35,6 +55,7 @@ class NotesnookCollectorError(RuntimeError):
 def _sync_state(
     root: ET.Element,
     acquisition_environment: str,
+    profile,
 ) -> dict[str, object]:
     if acquisition_environment not in {"device_only", "controlled_online"}:
         raise NotesnookCollectorError("acquisition environment is invalid")
@@ -44,7 +65,7 @@ def _sync_state(
         if _shown(node)
         and node.get("class") == "android.widget.TextView"
         and node.get("text", "").strip().startswith(
-            ("Synced ", "Syncing", "Sync failed ")
+            tuple(display_text(profile, key) for key in ("synced", "syncing", "sync_failed"))
         )
     ]
     if len(statuses) != 1:
@@ -52,16 +73,16 @@ def _sync_state(
     status = statuses[0]
     passed = (
         acquisition_environment == "device_only"
-        and status.startswith("Sync failed ")
-        and "(Offline)" in status
+        and status.startswith(display_text(profile, 'sync_failed'))
+        and display_text(profile, 'offline') in status
     ) or (
         acquisition_environment == "controlled_online"
-        and status.startswith("Synced ")
+        and status.startswith(display_text(profile, 'synced'))
     )
-    return {"sync_label": status, "sync_gate_passed": passed}
+    return {"sync_label": status, "sync_label_matches_environment": passed}
 
 
-def _account_record(root: ET.Element) -> dict[str, str]:
+def _account_record(root: ET.Element, profile) -> dict[str, str]:
     labels = [
         node.get("text", "").strip()
         for node in root.iter()
@@ -73,7 +94,7 @@ def _account_record(root: ET.Element) -> dict[str, str]:
     sync_labels = [
         label
         for label in labels
-        if label.startswith(("Synced ", "Syncing", "Sync failed "))
+        if label.startswith(tuple(display_text(profile, key) for key in ("synced", "syncing", "sync_failed")))
     ]
     if len(emails) != 1 or len(sync_labels) != 1:
         raise NotesnookCollectorError("account context is unavailable")
@@ -83,14 +104,11 @@ def _account_record(root: ET.Element) -> dict[str, str]:
     }
 
 
-def _bounds(node: ET.Element) -> tuple[int, int, int, int]:
-    match = _BOUNDS.fullmatch(node.get("bounds", ""))
-    if match is None:
-        raise NotesnookCollectorError("element bounds are invalid")
-    bounds = tuple(map(int, match.groups()))
-    if bounds[0] >= bounds[2] or bounds[1] >= bounds[3]:
-        raise NotesnookCollectorError("element bounds are invalid")
-    return bounds
+def _bounds(node):
+    try:
+        return parse_bounds(node.get('bounds', ''), allow_negative=False)
+    except ValueError:
+        raise NotesnookCollectorError("element bounds are invalid") from None
 
 
 def _shown(node: ET.Element) -> bool:
@@ -100,28 +118,6 @@ def _shown(node: ET.Element) -> bool:
     )
 
 
-def _contains(
-    outer: tuple[int, int, int, int],
-    inner: tuple[int, int, int, int],
-) -> bool:
-    return (
-        outer[0] <= inner[0]
-        and outer[1] <= inner[1]
-        and outer[2] >= inner[2]
-        and outer[3] >= inner[3]
-    )
-
-
-def _overlaps(
-    first: tuple[int, int, int, int],
-    second: tuple[int, int, int, int],
-) -> bool:
-    return (
-        first[0] < second[2]
-        and first[2] > second[0]
-        and first[1] < second[3]
-        and first[3] > second[1]
-    )
 
 
 def _workspace_state(device, root: ET.Element) -> str:
@@ -210,15 +206,16 @@ def _note_cards(
         _bounds(node)
         for node in root.iter()
         if _shown(node)
-        and node.get("resource-id") == "buttons.add"
+        and node.get("resource-id") == field_id(device_profile(device), "buttons.add")
         and node.get("clickable") == "true"
     ]
     cards = []
-    for card in lists[0].iter():
-        resource_id = card.get("resource-id", "")
-        content_description = card.get("content-desc", "").strip()
+    profile = device_profile(device)
+    for values, card in read_rows(lists[0], parsing_spec(profile, 'cards'), ui_fields=profile.parameters['ui_fields']):
+        resource_id = values['resource_id']
+        content_description = values['content_description']
         if (
-            not resource_id.startswith("note-item-")
+            not resource_id.startswith(display_text(device_profile(device), 'note_item_prefix'))
             or not content_description
             or not _shown(card)
             or card.get("clickable") != "true"
@@ -227,7 +224,7 @@ def _note_cards(
         menus = [
             node
             for node in card.iter()
-            if node.get("resource-id") == "listitem.menu"
+            if node.get("resource-id") == field_id(device_profile(device), "listitem.menu")
             and _shown(node)
             and node.get("clickable") == "true"
         ]
@@ -258,48 +255,53 @@ def _note_cards(
     ))
 
 
-def _history_rows(root: ET.Element) -> tuple[dict[str, object], ...]:
+def _history_rows(root: ET.Element, profile) -> tuple[dict[str, object], ...]:
     rows = sorted(
         (
-            node
-            for node in root.iter()
-            if _shown(node)
-            and node.get("class") == "android.view.ViewGroup"
-            and node.get("clickable") == "true"
-            and _HISTORY_LABEL.fullmatch(
-                node.get("content-desc", "").strip()
-            )
+            (values, node)
+            for values, node in read_rows(root, parsing_spec(profile, 'history'), ui_fields=profile.parameters['ui_fields'])
+            if _shown(node) and display_pattern(profile, 'history_label').fullmatch(values['label'])
         ),
-        key=lambda node: (_bounds(node)[1], _bounds(node)[0]),
+        key=lambda item: (_bounds(item[1])[1], _bounds(item[1])[0]),
     )
     return tuple(
         {
             "version_ref": f"version-{index:06d}",
-            "label": node.get("content-desc", "").strip(),
+            "label": values['label'],
             "bounds": _bounds(node),
         }
-        for index, node in enumerate(rows, 1)
+        for index, (values, node) in enumerate(rows, 1)
     )
 
 
-def _history_version(root: ET.Element) -> dict[str, object]:
-    values = []
-    prohibited = {"Restore", "Delete permanently"}
-    for node in root.iter():
-        value = node.get("text", "").strip()
-        if (
-            _shown(node)
-            and node.get("class")
-            in {
-                "android.view.View",
-                "android.widget.TextView",
-                "android.widget.EditText",
-            }
-            and value
-            and value not in prohibited
-            and value not in values
-        ):
-            values.append(value)
+def _history_overlap(before, after):
+    previous = [row["label"] for row in before]
+    current = [row["label"] for row in after]
+    overlaps = overlap_candidates(previous, current)
+    if not overlaps:
+        raise NotesnookCollectorError("history overlap is unavailable")
+    return max(overlaps)
+
+
+def _checkbox_record(root: ET.Element) -> dict[str, object]:
+    # UI text does not encode checklist state. Preserve only explicit accessible controls.
+    controls = [node for node in root.iter() if _shown(node)
+                and node.get("class") == "android.widget.CheckBox"]
+    return {
+        "checkbox_state_status": "observed" if controls else "not_exposed",
+        "checkboxes": [{"label": node.get("text") or node.get("content-desc", ""),
+                        "checked": {"true": True, "false": False}.get(node.get("checked")),
+                        "bounds": _bounds(node)} for node in controls],
+    }
+
+
+def _history_version(root: ET.Element, profile) -> dict[str, object]:
+    restore = display_text(profile, 'history_restore')
+    delete = display_text(profile, 'history_delete')
+    values = node_values(
+        (node for node in root.iter() if _shown(node) and node.get('class') in {
+            'android.view.View', 'android.widget.TextView', 'android.widget.EditText'}),
+        exclude={restore, delete}, unique=True)
     if not values:
         raise NotesnookCollectorError("history version is unavailable")
     controls = {
@@ -310,12 +312,13 @@ def _history_version(root: ET.Element) -> dict[str, object]:
     return {
         "title": values[0],
         "visible_content": values[1:],
-        "restore_control_observed": "Restore" in controls,
-        "delete_control_observed": "Delete permanently" in controls,
+        "restore_control_observed": restore in controls,
+        "delete_control_observed": delete in controls,
+        **_checkbox_record(root),
     }
 
 
-def _current_note_record(root: ET.Element) -> dict[str, object] | None:
+def _current_note_record(root: ET.Element, profile) -> dict[str, object] | None:
     titles = [
         node.get("text", "").strip()
         for node in root.iter()
@@ -329,7 +332,7 @@ def _current_note_record(root: ET.Element) -> dict[str, object] | None:
         for node in root.iter()
         if _shown(node)
         and node.get("class") == "android.widget.TextView"
-        and (match := _WORD_COUNT.fullmatch(
+        and (match := display_pattern(profile, 'word_count', flags=re.IGNORECASE).fullmatch(
             node.get("text", "").strip()
         ))
     ]
@@ -351,39 +354,29 @@ def _current_note_record(root: ET.Element) -> dict[str, object] | None:
         "title": titles[0],
         "body_text": "\n".join(body),
         "word_count": word_count,
+        **_checkbox_record(root),
         "content_status": (
             "complete" if body or word_count == 0 else "partial"
         ),
     }
 
 
-def _note_menu_record(root: ET.Element) -> dict[str, str]:
-    values = [
-        node.get("text", "").strip()
-        for node in root.iter()
-        if _shown(node)
-        and node.get("class") == "android.widget.TextView"
-        and node.get("text", "").strip()
-    ]
+def _note_menu_record(root: ET.Element, profile) -> dict[str, str]:
+    values = node_values(node for node in root.iter() if _shown(node) and node.get('class') == 'android.widget.TextView')
     try:
-        created = values.index("Created at")
-        edited = values.index("Last edited at")
-        record = {
-            "title": values[0],
-            "created_at": values[created + 1],
-            "last_edited_at": values[edited + 1],
-        }
+        metadata, positions = labelled_values(values, {key: display_text(profile, key) for key in ('created_at', 'last_edited_at')})
+        record = {'title': values[0], **metadata}
     except (IndexError, ValueError):
         raise NotesnookCollectorError("note metadata is unavailable") from None
-    if created == 0 or edited <= created + 1:
+    if positions['created_at'] == 0 or positions['last_edited_at'] <= positions['created_at'] + 1:
         raise NotesnookCollectorError("note metadata is unavailable")
     return record
 
 
-def _attachment_rows(root: ET.Element) -> tuple[dict[str, object], ...]:
+def _attachment_rows(root: ET.Element, profile) -> tuple[dict[str, object], ...]:
     rows = []
     for node in root.iter():
-        match = _ATTACHMENT_ROW.fullmatch(
+        match = display_pattern(profile, 'attachment_row').fullmatch(
             node.get("content-desc", "").strip()
         )
         if (
@@ -469,7 +462,7 @@ def _changed_files(
     before: tuple[tuple[str, int, int], ...],
     after: tuple[tuple[str, int, int], ...],
 ) -> tuple[tuple[str, int, int], ...]:
-    changed = tuple(item for item in after if item not in before)
+    changed = changed_inventory(before, after, key=lambda row: row, signature=lambda row: True)
     if len(changed) != 1:
         raise NotesnookCollectorError("single changed file is unavailable")
     return changed
@@ -490,27 +483,14 @@ def _trash_cards(
     )
 
 
-def _trash_metadata(root: ET.Element) -> dict[str, object]:
-    values = [
-        node.get("text", "").strip()
-        for node in root.iter()
-        if _shown(node)
-        and node.get("class") == "android.widget.TextView"
-        and node.get("text", "").strip()
-    ]
+def _trash_metadata(root: ET.Element, profile) -> dict[str, object]:
+    values = node_values(node for node in root.iter() if _shown(node) and node.get('class') == 'android.widget.TextView')
     try:
-        created = values.index("Created at")
-        deleted = values.index("Deleted at")
-        edited = values.index("Last edited at")
-        record = {
-            "title": values[0],
-            "created_at": values[created + 1],
-            "deleted_at": values[deleted + 1],
-            "last_edited_at": values[edited + 1],
-        }
+        metadata, positions = labelled_values(values, {key: display_text(profile, key) for key in ('created_at', 'deleted_at', 'last_edited_at')})
+        record = {'title': values[0], **metadata}
     except (IndexError, ValueError):
         raise NotesnookCollectorError("trash metadata is unavailable") from None
-    if created == 0 or deleted <= created + 1 or edited <= deleted + 1:
+    if positions['created_at'] == 0 or positions['deleted_at'] <= positions['created_at'] + 1 or positions['last_edited_at'] <= positions['deleted_at'] + 1:
         raise NotesnookCollectorError("trash metadata is unavailable")
     controls = {
         node.get("content-desc", "").strip()
@@ -519,8 +499,8 @@ def _trash_metadata(root: ET.Element) -> dict[str, object]:
     }
     return {
         **record,
-        "restore_control_observed": "Restore" in controls,
-        "delete_control_observed": "Delete" in controls,
+        "restore_control_observed": display_text(profile, 'trash_restore') in controls,
+        "delete_control_observed": display_text(profile, 'trash_delete') in controls,
     }
 
 
@@ -544,7 +524,7 @@ def _selection_state(
     ]
     if len(headers) != 1 or len(exports) != 1:
         raise NotesnookCollectorError("selection state is unavailable")
-    match = _SELECTION_COUNT.fullmatch(headers[0].get("content-desc", ""))
+    match = display_pattern(device_profile(device), 'selection_count').fullmatch(headers[0].get("content-desc", ""))
     if match is None:
         raise NotesnookCollectorError("selection count is unavailable")
     parents = {child: parent for parent in root.iter() for child in parent}
@@ -576,7 +556,7 @@ def _tree(device, observation_id: str) -> ET.Element:
         raise NotesnookCollectorError("observation is invalid") from None
 
 
-def _export_success(root: ET.Element) -> tuple[int, str]:
+def _export_success(root: ET.Element, profile) -> tuple[int, str]:
     labels = [
         node.get("text", "")
         for node in root.iter()
@@ -585,12 +565,12 @@ def _export_success(root: ET.Element) -> tuple[int, str]:
     counts = [
         match
         for label in labels
-        if (match := _EXPORTED_COUNT.fullmatch(label)) is not None
+        if (match := display_pattern(profile, 'exported_count').fullmatch(label)) is not None
     ]
     files = [
         match
         for label in labels
-        if (match := _EXPORTED_FILE.fullmatch(label)) is not None
+        if (match := display_pattern(profile, 'exported_file').fullmatch(label)) is not None
     ]
     if len(counts) != 1 or len(files) != 1:
         raise NotesnookCollectorError("export success is unavailable")
@@ -611,9 +591,11 @@ def _unique_clickable(
         if node.get("visible-to-user") == "true"
         and node.get("clickable") == "true"
     ]
-    if len(matches) != 1:
-        raise NotesnookCollectorError(f"{element_id} is unavailable")
-    return _bounds(matches[0])
+    try:
+        node = one_candidate(matches)
+    except ValueError:
+        raise NotesnookCollectorError(f"{element_id} is unavailable") from None
+    return _bounds(node)
 
 
 def _partial(reason: str, target_ref: str) -> dict[str, object]:
@@ -630,6 +612,9 @@ def _select_aura_directory(
     suffix: str = "",
 ) -> bool:
     documents_root = _tree(device, documents_observation_id)
+    if any(node.get("package") == ANDROID_DOCUMENTS_PACKAGE
+           for node in documents_root.iter()):
+        return _select_android_directory(device, documents_observation_id, suffix)
     current_aura = device.matching_elements(
         documents_root, "documentsui.current-aura"
     )
@@ -688,6 +673,10 @@ def _select_aura_directory(
                     if (label.get("package") != selector["owner_package"]
                             or label.get("text") != selector["value"]
                             or label.get("visible-to-user") != "true"):
+                        continue
+                    # DocumentsUI breadcrumbs accept taps despite clickable=false.
+                    if label.get("resource-id") == f"{DOCUMENTS_PACKAGE}:id/breadcrumb_text":
+                        targets.append(_bounds(label))
                         continue
                     row = parents.get(label)
                     while row is not None and row.get("clickable") != "true":
@@ -759,12 +748,37 @@ def _select_aura_directory(
     return True
 
 
+def _select_android_directory(device, observation_id, suffix):
+    """Android 9 DocumentsUI can initially show Recent, without a folder row."""
+    for step in ("show-roots", "download-root", "aura-directory", "use-folder"):
+        root = _tree(device, observation_id)
+        if step == "use-folder":
+            toolbars = device.matching_elements(root, "documentsui.android.toolbar")
+            if len(toolbars) != 1 or len(device.matching_elements(
+                    toolbars[0], "documentsui.android.current-aura")) != 1:
+                return False
+        try:
+            node = one_candidate(node for node in device.matching_elements(
+                root, f"documentsui.android.{step}")
+                if node.get("visible-to-user") == "true")
+        except ValueError:
+            return False
+        # Android 9 folder labels receive taps through their RecyclerView rows,
+        # although neither the label nor row advertises clickable=true.
+        device.click_bounds(f"action-documents-android-{step}{suffix}",
+                            _bounds(node), observation_id)
+        timeout = device_profile(device).timings["export_completion_timeout"] if step == "use-folder" else None
+        observation_id = device.observe(
+            f"observation-documents-android-{step}{suffix}", timeout=timeout)["observation_id"]
+    return any(_shown(node) for node in _tree(device, observation_id).iter())
+
+
 def collect_account_context(
     device,
     outputs,
     target_ref: str,
     acquisition_environment: str,
-) -> dict[str, object]:
+) -> tuple[dict[str, object], str]:
     if hasattr(outputs, "begin_item"):
         outputs.begin_item(f"account:{target_ref}", "notesnook.notes", "account")
     ordinary = device.observe("observation-account-notes")
@@ -776,7 +790,7 @@ def collect_account_context(
         except NotesnookCollectorError:
             if len(device.matching_elements(ordinary_tree, "notesnook.side-menu.open")) == 1:
                 break
-        if recovery == 4 or not any(node.get("package") in {PACKAGE, DOCUMENTS_PACKAGE}
+        if recovery == 4 or not any(node.get("package") in PACKAGES
                                      for node in ordinary_tree.iter()):
             raise NotesnookCollectorError("notesnook entry screen is unavailable")
         device.back(f"action-recover-notes-entry-{recovery + 1}", ordinary["observation_id"])
@@ -813,8 +827,8 @@ def collect_account_context(
         "acquisition_environment": acquisition_environment,
     }
     if workspace_state == "local_only":
-        record["sync_gate_passed"] = False
-        return record
+        record["sync_label_matches_environment"] = False
+        return record, ordinary["observation_id"]
 
     device.click(
         "action-open-side-menu",
@@ -848,7 +862,7 @@ def collect_account_context(
         account_tree, "notesnook.account.sync-now"
     )) != 1:
         raise NotesnookCollectorError("account context is unavailable")
-    account_record = _account_record(account_tree)
+    account_record = _account_record(account_tree, profile=device_profile(device))
     device.click(
         "action-sync-now",
         device.element_selector("notesnook.account.sync-now"),
@@ -860,9 +874,9 @@ def collect_account_context(
         )
         sync_state = _sync_state(
             _tree(device, account["observation_id"]),
-            acquisition_environment,
+            acquisition_environment, profile=device_profile(device),
         )
-        if not sync_state["sync_label"].startswith("Syncing"):
+        if not sync_state["sync_label"].startswith(display_text(device_profile(device), 'syncing')):
             break
     record.update({
         "account_email": account_record["account_email"],
@@ -890,7 +904,83 @@ def collect_account_context(
         device, _tree(device, returned_notes["observation_id"])
     ) != "authenticated":
         raise NotesnookCollectorError("account return is unavailable")
-    return record
+    return record, returned_notes["observation_id"]
+
+
+def _history_content_bounds(root):
+    # WebView accessibility may report scrollable=false even for a long diff.
+    nodes = [n for n in root.iter() if _shown(n) and n.get("class") == "android.webkit.WebView"]
+    if not nodes:
+        nodes = [n for n in root.iter() if _shown(n) and n.get("scrollable") == "true"]
+    rectangles = {_bounds(n) for n in nodes}
+    if len(rectangles) > 1:
+        raise NotesnookCollectorError("history content viewport is ambiguous")
+    return next(iter(rectangles), None)
+
+
+def _collect_history_content(device, outputs, target_ref, note_ref, version_ref, label,
+                             open_action_id, first_observation_id):
+    root = _tree(device, first_observation_id)
+    first = _history_version(root, device_profile(device))
+    identity = {"target_ref": target_ref, "note_ref": note_ref, "version_ref": version_ref, "label": label}
+    prefix = f"materialize/notes/{note_ref}/history/{version_ref}"
+    observation_id, action_id, page = first_observation_id, open_action_id, 1
+    windows = []
+    complete = False
+    try:
+        viewport = _history_content_bounds(root)
+        if viewport is None:
+            complete = True
+        else:
+            def observe():
+                current_root = _tree(device, observation_id)
+                current = _history_version(current_root, device_profile(device))
+                if current["title"] != first["title"]:
+                    raise NotesnookCollectorError("history version changed while scrolling")
+                signature = content_signature(ET.tostring(current_root), PACKAGE)
+                return current, signature
+
+            def advance():
+                nonlocal observation_id, action_id, page
+                if page >= getattr(device, "history_max_pages", 1000):
+                    raise NotesnookCollectorError("history content traversal limit reached")
+                action_id = f"action-scroll-{note_ref}-{version_ref}-content-{page:06d}"
+                device.swipe_history(action_id, viewport, observation_id)
+                page += 1
+                observation_id = device.observe(f"observation-{note_ref}-{version_ref}-content-{page:06d}")["observation_id"]
+
+            for current, _ in iter_windows(observe, advance, lambda value: value[1], include_boundary=True, adjacent=True):
+                path = f"{prefix}/window-{page:06d}.json"
+                outputs.write_record(path, {**identity, **current, "window_number": page},
+                                     action_id=action_id, observation_id=observation_id, include_observation=True)
+                windows.append(path)
+            complete = True
+    finally:
+        outputs.write_record(f"{prefix}.json", {
+            **identity, **first, "content_status": "complete" if complete else "partial",
+            "visible_content_scope": "initial_window", "content_windows": windows,
+            "body_traversal": "unchanged_accessible_content_window" if complete and windows else
+                              "no_scroll_container" if complete else "incomplete",
+        }, action_id=open_action_id, observation_id=first_observation_id, include_observation=True)
+    return observation_id
+
+
+def _ready_history(device, observation_id):
+    profile = device_profile(device)
+    initial_id = observation_id
+    for probe, _ in enumerate(poll_samples(lambda: None, timeout=profile.timings['default_timeout'],
+                                           interval=profile.timings['poll_interval']), 1):
+        if probe > 1:
+            observation_id = device.observe(f"{initial_id}-ready-{probe:06d}")["observation_id"]
+        root = _tree(device, observation_id)
+        rows = _history_rows(root, profile=profile)
+        labels = {node.get("text", "").strip() for node in root.iter()
+                  if _shown(node) and node.get("package") == PACKAGE
+                  and node.get("class") == "android.widget.TextView"}
+        if (display_text(profile, "history_title") in labels
+                and (rows or display_text(profile, "history_empty") in labels)):
+            return observation_id, root, rows
+    raise NotesnookCollectorError("history surface or rows are unavailable")
 
 
 def _collect_history(
@@ -908,66 +998,88 @@ def _collect_history(
     history_observation_id = f"observation-{note_ref}-history"
     history = device.observe(history_observation_id)
     history_observation_id = history["observation_id"]
-    rows = _history_rows(_tree(device, history_observation_id))
+    versions = []
+    history_observation_id, _, rows = _ready_history(device, history_observation_id)
+    skip = 0
+    action_id = f"action-open-{note_ref}-history"
+    # ponytail: bounded traversal; increase the profile limit for unusually long histories.
+    limit = getattr(device, "history_max_pages", 1000)
+    page = 1
+    completion_condition = None
+    def advance_history():
+        nonlocal rows, history_observation_id, action_id, skip, page, completion_condition
+        if not rows:
+            completion_condition = "explicit_empty_history"
+            return False
+        root = _tree(device, history_observation_id)
+        containers = [node for node in root.iter() if _shown(node)
+                      and node.get("package") == "com.streetwriters.notesnook"
+                      and node.get("class") == "android.widget.ScrollView"
+                      and node.get("scrollable") == "true"]
+        if not containers:
+            completion_condition = "no_scroll_container"
+            return False
+        if len(containers) != 1:
+            raise NotesnookCollectorError("history scroll container is ambiguous")
+        previous = rows
+        viewport = _bounds(containers[0])
+        action_id = f"action-scroll-{note_ref}-history-{page:06d}"
+        device.swipe_history(action_id, viewport, history_observation_id)
+        history_observation_id = device.observe(f"observation-{note_ref}-history-window-{page+1:06d}")["observation_id"]
+        history_observation_id, after_root, rows = _ready_history(device, history_observation_id)
+        if content_signature(ET.tostring(root), PACKAGE) == content_signature(
+            ET.tostring(after_root), PACKAGE
+        ):
+            completion_condition = "unchanged_history_xml"
+            return False
+        skip = _history_overlap(previous, rows)
+        if page >= limit:
+            raise NotesnookCollectorError("history traversal limit reached")
+        page += 1
+    for _ in iter_windows(lambda: rows, advance_history, lambda _: None):
+        root = _tree(device, history_observation_id)
+        outputs.write_record(
+            f"materialize/notes/{note_ref}/history/window-{page:06d}.json",
+            {"target_ref": target_ref, "note_ref": note_ref,
+             "visible_versions": [{"label": row["label"], "bounds": row["bounds"]} for row in rows]},
+            action_id=action_id, observation_id=history_observation_id, include_observation=True,
+        )
+        for expected in visit_candidates(range(skip, len(rows)), lambda index: rows[index]):
+            version_ref = f"version-{len(versions) + 1:06d}"
+            versions.append({"version_ref": version_ref, "label": expected["label"]})
+            if hasattr(outputs, "begin_item"):
+                outputs.begin_item(f"revision:{note_ref}:{version_ref}", "notesnook.notes", "revision", note_ref=note_ref, version_ref=version_ref)
+            open_action_id = f"action-open-{note_ref}-{version_ref}"
+            device.click_bounds(
+                open_action_id,
+                expected["bounds"],
+                history_observation_id,
+            )
+            version_observation_id = f"observation-{note_ref}-{version_ref}"
+            version = device.observe(version_observation_id)
+            version_observation_id = version["observation_id"]
+            version_observation_id = _collect_history_content(
+                device, outputs, target_ref, note_ref, version_ref, expected["label"],
+                open_action_id, version_observation_id,
+            )
+            device.back(
+                f"action-return-{note_ref}-{version_ref}",
+                version_observation_id,
+            )
+            returned_history = device.observe(
+                f"observation-{note_ref}-history-after-{version_ref}"
+            )
+            history_observation_id = returned_history["observation_id"]
+            history_observation_id, _, returned_rows = _ready_history(device, history_observation_id)
+            if [r["label"] for r in returned_rows] != [r["label"] for r in rows]:
+                raise NotesnookCollectorError("history window changed after returning from version")
+            rows = returned_rows
     outputs.write_record(
         f"materialize/notes/{note_ref}/history/history.json",
-        {
-            "target_ref": target_ref,
-            "note_ref": note_ref,
-            "versions": [
-                {
-                    "version_ref": row["version_ref"],
-                    "label": row["label"],
-                }
-                for row in rows
-            ],
-        },
-        action_id=f"action-open-{note_ref}-history",
-        observation_id=history_observation_id,
-        include_observation=True,
+        {"target_ref": target_ref, "note_ref": note_ref, "versions": versions,
+         "traversal_status": "complete", "completion_condition": completion_condition},
+        action_id=action_id, observation_id=history_observation_id, include_observation=True,
     )
-
-    for index, expected in enumerate(rows):
-        current_rows = _history_rows(_tree(device, history_observation_id))
-        if (
-            len(current_rows) != len(rows)
-            or current_rows[index]["label"] != expected["label"]
-        ):
-            raise NotesnookCollectorError("history version is unavailable")
-        version_ref = expected["version_ref"]
-        if hasattr(outputs, "begin_item"):
-            outputs.begin_item(f"revision:{note_ref}:{version_ref}", "notesnook.notes", "revision", note_ref=note_ref, version_ref=version_ref)
-        open_action_id = f"action-open-{note_ref}-{version_ref}"
-        device.click_bounds(
-            open_action_id,
-            current_rows[index]["bounds"],
-            history_observation_id,
-        )
-        version_observation_id = f"observation-{note_ref}-{version_ref}"
-        version = device.observe(version_observation_id)
-        version_observation_id = version["observation_id"]
-        record = {
-            "target_ref": target_ref,
-            "note_ref": note_ref,
-            "version_ref": version_ref,
-            "label": expected["label"],
-            **_history_version(_tree(device, version_observation_id)),
-        }
-        outputs.write_record(
-            f"materialize/notes/{note_ref}/history/{version_ref}.json",
-            record,
-            action_id=open_action_id,
-            observation_id=version_observation_id,
-            include_observation=True,
-        )
-        device.back(
-            f"action-return-{note_ref}-{version_ref}",
-            version_observation_id,
-        )
-        returned_history = device.observe(
-            f"observation-{note_ref}-history-after-{version_ref}"
-        )
-        history_observation_id = returned_history["observation_id"]
 
     device.back(f"action-close-{note_ref}-history", history_observation_id)
     returned_id = (
@@ -978,7 +1090,7 @@ def _collect_history(
         device, _tree(device, returned["observation_id"])
     ) != "authenticated":
         raise NotesnookCollectorError("note list return is unavailable")
-    return len(rows), returned["observation_id"]
+    return len(versions), returned["observation_id"]
 
 
 def _collect_attachments(
@@ -997,8 +1109,8 @@ def _collect_attachments(
     list_observation_id = f"observation-{note_ref}-attachments"
     attachment_list = device.observe(list_observation_id)
     list_observation_id = attachment_list["observation_id"]
-    seen_pages = set()
-    seen_rows = {}
+    seen_rows = []
+    previous = None
     page = 1
     while True:
         root = _tree(device, list_observation_id)
@@ -1011,7 +1123,7 @@ def _collect_attachments(
         ]
         if len(all_files) != 1:
             raise NotesnookCollectorError("All files is unavailable")
-        rows = _attachment_rows(root)
+        rows = _attachment_rows(root, profile=device_profile(device))
         signature = tuple(
             (
                 row["kind_label"],
@@ -1020,43 +1132,27 @@ def _collect_attachments(
             )
             for row in rows
         )
-        if signature in seen_pages:
+        if signature == previous:
             break
-        seen_pages.add(signature)
 
-        for row in rows:
-            key = (
-                row["kind_label"],
-                row["filename"],
-                row["displayed_size"],
-            )
-            if key in seen_rows:
-                continue
+        overlap = max(overlap_candidates(previous or (), signature), default=0)
+        previous = signature
+        for index, row in enumerate(rows[overlap:], overlap):
             attachment_ref = f"attachment-{len(seen_rows) + 1:06d}"
             if hasattr(outputs, "begin_item"):
-                outputs.begin_item(f"attachment:{note_ref}:{attachment_ref}", "notesnook.attachments", "attachment", note_ref=note_ref, attachment_ref=attachment_ref)
+                outputs.begin_item(f"attachment:{note_ref}:{attachment_ref}", "notesnook.attachments", "attachment", note_ref=note_ref, attachment_ref=attachment_ref, filename=row["filename"])
             expected = {**row, "attachment_ref": attachment_ref}
-            seen_rows[key] = expected
-            current_rows = _attachment_rows(
-                _tree(device, list_observation_id)
-            )
-            current = [
-                item
-                for item in current_rows
-                if (
-                    item["kind_label"],
-                    item["filename"],
-                    item["displayed_size"],
-                ) == key
-            ]
-            if len(current) != 1:
-                raise NotesnookCollectorError(
-                    "attachment row is unavailable"
-                )
+            seen_rows.append(expected)
+            current_rows = _attachment_rows(_tree(device, list_observation_id), profile=device_profile(device))
+            try:
+                current = ordered_candidate(rows, current_rows, index,
+                    key=itemgetter("kind_label", "filename", "displayed_size"))
+            except ValueError:
+                raise NotesnookCollectorError("attachment row is unavailable") from None
             row_action_id = f"action-open-{note_ref}-{attachment_ref}"
             device.click_bounds(
                 row_action_id,
-                current[0]["bounds"],
+                current["bounds"],
                 list_observation_id,
             )
             detail_observation_id = (
@@ -1100,6 +1196,21 @@ def _collect_attachments(
                 list_observation_id,
                 baseline,
             )
+            if after == baseline:
+                returned = device.observe(f"observation-unavailable-return{suffix}")
+                list_observation_id = returned["observation_id"]
+                root = _tree(device, list_observation_id)
+                labels = [node for node in root.iter() if _shown(node)
+                          and node.get("class") == "android.widget.TextView"
+                          and node.get("text", "").strip() == "All files"]
+                try:
+                    one_candidate(labels)
+                    ordered_candidate(rows, _attachment_rows(root, profile=device_profile(device)), index,
+                                      key=itemgetter("kind_label", "filename", "displayed_size"))
+                except ValueError:
+                    raise NotesnookCollectorError("attachment list return is unavailable") from None
+                outputs.preserve_failure("attachment_file_not_observed", completed=True)
+                continue
             remote_path, size, _ = _changed_files(baseline, after)[0]
             if PurePosixPath(remote_path).name != expected["filename"]:
                 raise NotesnookCollectorError(
@@ -1164,7 +1275,7 @@ def _collect_attachments(
                         "displayed_size",
                     )
                 }
-                for row in seen_rows.values()
+                for row in seen_rows
             ],
         },
         action_id=open_action_id,
@@ -1196,96 +1307,103 @@ def _collect_current_note(
     notes_observation_id: str,
 ) -> tuple[str, bool]:
     open_action_id = f"action-open-{note_ref}-current"
-    device.click_bounds(
-        open_action_id,
-        card_bounds,
-        notes_observation_id,
-    )
-    record = None
     observation_id = ""
-    for attempt in range(1, 7):
-        suffix = "" if attempt == 1 else f"-retry-{attempt:06d}"
-        current = device.observe(f"observation-{note_ref}-current{suffix}")
-        observation_id = current["observation_id"]
-        record = _current_note_record(_tree(device, observation_id))
-        if record is not None:
-            break
-    if record is None:
-        raise NotesnookCollectorError("current note is unavailable")
-    outputs.write_record(
-        f"materialize/notes/{note_ref}/current.json",
-        {
-            "target_ref": target_ref,
-            "note_ref": note_ref,
-            **record,
-        },
-        action_id=open_action_id,
-        observation_id=observation_id,
-        include_observation=True,
-    )
-    device.back(f"action-close-{note_ref}-current", observation_id)
-    returned = device.observe(
-        f"observation-materialize-notes-after-{note_ref}-current"
-    )
-    if _workspace_state(
-        device, _tree(device, returned["observation_id"])
-    ) != "authenticated":
-        raise NotesnookCollectorError("note list return is unavailable")
-    return (
-        returned["observation_id"],
-        record["content_status"] == "partial",
-    )
+    def enter():
+        device.click_bounds(
+            open_action_id,
+            card_bounds,
+            notes_observation_id,
+        )
+    def read():
+        nonlocal observation_id
+        record = None
+        observation_id = ""
+        profile = device_profile(device)
+        current_action_id = open_action_id
+        for attempt, _ in enumerate(poll_samples(lambda: None,
+                probes=profile.parameters['note_open_probes'],
+                interval=profile.timings['poll_interval']), 1):
+            suffix = "" if attempt == 1 else f"-retry-{attempt:06d}"
+            current = device.observe(f"observation-{note_ref}-current{suffix}")
+            observation_id = current["observation_id"]
+            root = _tree(device, observation_id)
+            record = _current_note_record(root, profile=profile)
+            if record is not None:
+                break
+            editors = [node for node in root.iter() if _shown(node)
+                       and node.get('class') == 'android.widget.EditText']
+            if (editors and not any(node.get('resource-id') == 'editor-title' for node in editors)
+                    and attempt < profile.parameters['note_open_probes']):
+                current_action_id = f'action-rewind-{note_ref}-current-{attempt:06d}'
+                device.swipe(current_action_id, 'down', observation_id)
+        if record is None:
+            raise NotesnookCollectorError("current note is unavailable")
+        outputs.write_record(
+            f"materialize/notes/{note_ref}/current.json",
+            {
+                "target_ref": target_ref,
+                "note_ref": note_ref,
+                **record,
+            },
+            action_id=current_action_id,
+            observation_id=observation_id,
+            include_observation=True,
+        )
+        return record["content_status"] == "partial"
+    def restore():
+        device.back(f"action-close-{note_ref}-current", observation_id)
+        returned = device.observe(
+            f"observation-materialize-notes-after-{note_ref}-current"
+        )
+        if _workspace_state(
+            device, _tree(device, returned["observation_id"])
+        ) != "authenticated":
+            raise NotesnookCollectorError("note list return is unavailable")
+        return returned["observation_id"]
+    partial, parent = visit_item(enter, read, restore)
+    return parent, partial
 
 
-def _rewind_note_list(device) -> str:
-    seen = set()
+def _rewind_note_list(device, *, initial_observation_id: str | None = None) -> str:
     page = 1
-    while True:
-        observation = device.observe(
-            f"observation-materialize-notes-rewind-{page:06d}"
-        )
-        observation_id = observation["observation_id"]
+    observation_id = None
+    def observe():
+        nonlocal observation_id
+        if page == 1 and initial_observation_id is not None:
+            observation_id = initial_observation_id
+        else:
+            observation = device.observe(f'observation-materialize-notes-rewind-{page:06d}')
+            observation_id = observation['observation_id']
         root = _tree(device, observation_id)
-        if _workspace_state(device, root) != "authenticated":
-            raise NotesnookCollectorError(
-                "authenticated workspace is unavailable"
-            )
-        note_list = next(
-            node
-            for node in device.matching_elements(
-                root, "notesnook.notes-list"
-            )
-            if _shown(node)
-        )
-        signature = tuple(
-            (node.get("resource-id"), node.get("content-desc", ""))
-            for node in note_list.iter()
-            if _shown(node)
-            and node.get("resource-id", "").startswith("note-item-")
-            and node.get("content-desc", "")
-        )
-        if signature in seen:
-            return observation_id
-        seen.add(signature)
-        device.swipe(
-            f"action-rewind-materialize-notes-{page:06d}",
-            "down",
-            observation_id,
-        )
+        if _workspace_state(device, root) != 'authenticated':
+            raise NotesnookCollectorError('authenticated workspace is unavailable')
+        note_list = next(node for node in device.matching_elements(root, 'notesnook.notes-list') if _shown(node))
+        signature = tuple((node.get('resource-id'), node.get('content-desc', ''))
+            for node in note_list.iter() if _shown(node)
+            and node.get('resource-id', '').startswith(display_text(device_profile(device), 'note_item_prefix'))
+            and node.get('content-desc', ''))
+        return observation_id, signature
+    def advance():
+        nonlocal page
+        device.swipe(f'action-rewind-materialize-notes-{page:06d}', 'down', observation_id)
         page += 1
+    _, last = seek_window(observe, advance, lambda value: value[1], lambda value: None)
+    return last[0]
 
 
 def _materialize_notes(
     device,
     outputs,
     target_ref: str,
+    *, initial_observation_id: str | None = None,
 ) -> tuple[int, int, int, int, str]:
     page = 1
-    observation_id = _rewind_note_list(device)
+    observation_id = _rewind_note_list(device, initial_observation_id=initial_observation_id)
     seen_pages = set()
     seen_notes = set()
     note_count = history_count = attachment_count = current_partial_count = 0
-    while True:
+    def read():
+        nonlocal observation_id
         root = _tree(device, observation_id)
         if _workspace_state(device, root) != "authenticated":
             raise NotesnookCollectorError(
@@ -1303,40 +1421,30 @@ def _materialize_notes(
                 )
                 if cards:
                     break
-        signature = tuple(card["source_key"] for card in cards)
-        if signature in seen_pages:
-            return (
-                note_count,
-                history_count,
-                attachment_count,
-                current_partial_count,
-                observation_id,
-            )
-        seen_pages.add(signature)
+        return cards
+    def advance():
+        nonlocal page, observation_id
+        device.swipe(
+            f"action-scroll-materialize-notes-page-{page:06d}",
+            "up",
+            observation_id,
+            distance_ratio=device_profile(device).parameters["note_list_scroll_ratio"],
+        )
+        page += 1
+        observation = device.observe(
+            f"observation-materialize-notes-page-{page:06d}"
+        )
+        observation_id = observation["observation_id"]
+    for cards in iter_windows(read, advance, lambda cards: tuple(card["source_key"] for card in cards)):
         if not cards:
-            return (
-                note_count,
-                history_count,
-                attachment_count,
-                current_partial_count,
-                observation_id,
-            )
-
-        for expected in cards:
-            if expected["source_key"] in seen_notes:
-                continue
-            current = next(
-                (
-                    card
-                    for card in _note_cards(
-                        device, _tree(device, observation_id)
-                    )
-                    if card["source_key"] == expected["source_key"]
-                ),
-                None,
-            )
+            break
+        def reacquire(expected):
+            current = next(matching_candidates(_note_cards(device, _tree(device, observation_id)), expected, key=itemgetter("source_key")), None)
             if current is None:
                 raise NotesnookCollectorError("note card is unavailable")
+            return expected, current
+        pending = pending_candidates(cards, seen_notes, key=itemgetter("source_key"))
+        for expected, current in visit_candidates(pending, reacquire):
             seen_notes.add(expected["source_key"])
             note_count += 1
             note_ref = f"note-{note_count:06d}"
@@ -1351,16 +1459,9 @@ def _materialize_notes(
                 observation_id,
             )
             current_partial_count += int(current_partial)
-            current = next(
-                (
-                    card
-                    for card in _note_cards(
-                        device, _tree(device, observation_id)
-                    )
-                    if card["source_key"] == expected["source_key"]
-                ),
-                None,
-            )
+            current = next(matching_candidates(
+                _note_cards(device, _tree(device, observation_id)), expected,
+                key=itemgetter("source_key")), None)
             if current is None:
                 raise NotesnookCollectorError("note card is unavailable")
             open_action_id = f"action-open-{note_ref}-menu"
@@ -1376,7 +1477,7 @@ def _materialize_notes(
                 "note_ref": note_ref,
                 "source_key": list(expected["source_key"]),
                 "content_description": expected["content_description"],
-                **_note_menu_record(_tree(device, menu_observation_id)),
+                **_note_menu_record(_tree(device, menu_observation_id), device_profile(device)),
             }
             outputs.write_record(
                 f"materialize/notes/{note_ref}/note.json",
@@ -1392,16 +1493,9 @@ def _materialize_notes(
                 note_ref,
                 menu_observation_id,
             )
-            current = next(
-                (
-                    card
-                    for card in _note_cards(
-                        device, _tree(device, observation_id)
-                    )
-                    if card["source_key"] == expected["source_key"]
-                ),
-                None,
-            )
+            current = next(matching_candidates(
+                _note_cards(device, _tree(device, observation_id)), expected,
+                key=itemgetter("source_key")), None)
             if current is None:
                 raise NotesnookCollectorError("note card is unavailable")
             reopen_action_id = (
@@ -1427,16 +1521,7 @@ def _materialize_notes(
             attachment_count += attachments
             observation_id = menu_observation_id
 
-        device.swipe(
-            f"action-scroll-materialize-notes-page-{page:06d}",
-            "up",
-            observation_id,
-        )
-        page += 1
-        observation = device.observe(
-            f"observation-materialize-notes-page-{page:06d}"
-        )
-        observation_id = observation["observation_id"]
+    return note_count, history_count, attachment_count, current_partial_count, observation_id
 
 
 def _materialize_trash(
@@ -1474,29 +1559,30 @@ def _materialize_trash(
     seen_pages = set()
     seen_items = set()
     records = []
-    while True:
+    def read():
+        nonlocal observation_id
         cards = _trash_cards(device, _tree(device, observation_id))
-        signature = tuple(card["source_key"] for card in cards)
-        if signature in seen_pages:
-            break
-        seen_pages.add(signature)
+        return cards
+    def advance():
+        nonlocal page, observation_id
+        device.swipe(
+            f"action-scroll-trash-page-{page:06d}",
+            "up",
+            observation_id,
+        )
+        page += 1
+        trash = device.observe(f"observation-trash-page-{page:06d}")
+        observation_id = trash["observation_id"]
+    for cards in iter_windows(read, advance, lambda cards: tuple(card["source_key"] for card in cards)):
         if not cards:
             break
-        for expected in cards:
-            if expected["source_key"] in seen_items:
-                continue
-            current = next(
-                (
-                    card
-                    for card in _trash_cards(
-                        device, _tree(device, observation_id)
-                    )
-                    if card["source_key"] == expected["source_key"]
-                ),
-                None,
-            )
+        def reacquire(expected):
+            current = next(matching_candidates(_trash_cards(device, _tree(device, observation_id)), expected, key=itemgetter("source_key")), None)
             if current is None:
                 raise NotesnookCollectorError("trash card is unavailable")
+            return expected, current
+        pending = pending_candidates(cards, seen_items, key=itemgetter("source_key"))
+        for expected, current in visit_candidates(pending, reacquire):
             seen_items.add(expected["source_key"])
             trash_ref = f"trash-{len(records) + 1:06d}"
             if hasattr(outputs, "begin_item"):
@@ -1514,7 +1600,7 @@ def _materialize_trash(
                 "trash_ref": trash_ref,
                 "source_key": list(expected["source_key"]),
                 "content_description": expected["content_description"],
-                **_trash_metadata(_tree(device, menu_observation_id)),
+                **_trash_metadata(_tree(device, menu_observation_id), device_profile(device)),
             }
             outputs.write_record(
                 f"materialize/trash/{trash_ref}.json",
@@ -1533,14 +1619,6 @@ def _materialize_trash(
             )
             observation_id = returned["observation_id"]
 
-        device.swipe(
-            f"action-scroll-trash-page-{page:06d}",
-            "up",
-            observation_id,
-        )
-        page += 1
-        trash = device.observe(f"observation-trash-page-{page:06d}")
-        observation_id = trash["observation_id"]
 
     outputs.write_record(
         "materialize/trash/trash.json",
@@ -1583,13 +1661,13 @@ def _materialize_trash(
     return len(records)
 
 
-def materialize(device, outputs, target_ref: str) -> dict[str, object]:
+def materialize(device, outputs, target_ref: str, *, initial_observation_id: str | None = None) -> dict[str, object]:
     if hasattr(outputs, "context"):
         outputs.context.begin_identification("notesnook.notes")
         outputs.context.begin_identification("notesnook.attachments")
     try:
         notes, versions, attachments, current_partial, notes_observation_id = (
-            _materialize_notes(device, outputs, target_ref)
+            _materialize_notes(device, outputs, target_ref, initial_observation_id=initial_observation_id)
         )
         trash = _materialize_trash(
             device,
@@ -1605,12 +1683,13 @@ def materialize(device, outputs, target_ref: str) -> dict[str, object]:
             "route": "materialize",
             "failure": str(error),
         }
+    attachment_failures = getattr(outputs, "attachment_failures", 0)
     report = {
-        "status": "partial" if current_partial else "complete",
+        "status": "partial" if current_partial or attachment_failures else "complete",
         "reason_code": (
             "notesnook_current_note_partial"
             if current_partial
-            else None
+            else "notesnook_attachments_not_acquired" if attachment_failures else None
         ),
         "target_ref": target_ref,
         "route": "materialize",
@@ -1620,6 +1699,9 @@ def materialize(device, outputs, target_ref: str) -> dict[str, object]:
         "trash_count": trash,
         "current_note_partial_count": current_partial,
     }
+    if attachment_failures:
+        report.update(attachment_not_acquired_count=attachment_failures,
+                      attachment_acquired_count=attachments - attachment_failures)
     outputs.write_record(
         "materialize/summary.json",
         report,
@@ -1631,11 +1713,12 @@ def materialize(device, outputs, target_ref: str) -> dict[str, object]:
     return report
 
 
-def collect(device, outputs, target_ref: str) -> dict[str, object]:
+def collect(device, outputs, target_ref: str, *, initial_observation_id: str | None = None) -> dict[str, object]:
     if hasattr(outputs, "begin_item"):
         outputs.context.begin_identification("notesnook.export")
         outputs.begin_item(f"export:{target_ref}", "notesnook.export", "note_export")
-    ordinary = device.observe("observation-ordinary-list")
+    ordinary = ({"observation_id": initial_observation_id} if initial_observation_id is not None
+                else device.observe("observation-ordinary-list"))
     try:
         ordinary_tree = _tree(device, ordinary["observation_id"])
         workspace_state = _workspace_state(device, ordinary_tree)
@@ -1703,14 +1786,21 @@ def collect(device, outputs, target_ref: str) -> dict[str, object]:
     if not _select_aura_directory(device, documents["observation_id"]):
         return _partial("export_directory_selection_failed", target_ref)
 
-    returned = device.observe("observation-returned")
-    try:
-        returned_count, reported_filename = _export_success(
-            _tree(device, returned["observation_id"])
-        )
-    except NotesnookCollectorError:
-        return _partial("application_return_unverified", target_ref)
-    if returned_count != selected_count:
+    profile = device_profile(device)
+    for probe, _ in enumerate(poll_samples(lambda: None,
+            timeout=profile.timings['export_completion_timeout'],
+            interval=profile.timings['poll_interval']), 1):
+        suffix = "" if probe == 1 else f"-retry-{probe:06d}"
+        returned = device.observe(f"observation-returned{suffix}")
+        try:
+            returned_count, reported_filename = _export_success(
+                _tree(device, returned["observation_id"]), profile=profile)
+        except NotesnookCollectorError:
+            continue
+        if returned_count != selected_count:
+            return _partial("export_count_mismatch", target_ref)
+        break
+    else:
         return _partial("application_return_unverified", target_ref)
 
     after = device.snapshot_files(

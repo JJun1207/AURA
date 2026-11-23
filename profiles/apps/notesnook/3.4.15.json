@@ -1,0 +1,605 @@
+{
+  "app_id": "notesnook",
+  "package_name": "com.streetwriters.notesnook",
+  "app_version": "3.4.15",
+  "acquisition_methods": [
+    "materialize",
+    "export"
+  ],
+  "targets": [
+    {
+      "target_id": "notesnook.notes",
+      "item_types": [
+        "account",
+        "note",
+        "revision",
+        "trash_item"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
+      "rules": {
+        "identification": {
+          "id": "notesnook.note_revision_and_trash_cards",
+          "parameters": {
+            "counted_item_types": [
+              "account",
+              "note",
+              "revision",
+              "trash_item"
+            ],
+            "ui_criteria": {
+              "identity_fields": [
+                "note_ref",
+                "version_ref",
+                "trash_ref"
+              ],
+              "workspace_gate": "authenticated_for_materialize"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "notesnook.notes.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "notes_and_trash_exhausted"
+            ]
+          }
+        },
+        "result": {
+          "id": "notesnook.notes.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "notesnook.notes.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      },
+      "environment_rationale": {
+        "device_only": "Signed-in local storage may expose notes, checklist state, revision content and trash listings/metadata. Retain accessible records and record unavailable portions.",
+        "controlled_online": "Use the same note, revision and trash-record procedures with synchronization available; the observed sync label does not itself determine acquisition success."
+      }
+    },
+    {
+      "target_id": "notesnook.attachments",
+      "item_types": [
+        "attachment"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "downloaded_file"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
+      "rules": {
+        "identification": {
+          "id": "notesnook.attachment_rows",
+          "parameters": {
+            "counted_item_types": [
+              "attachment"
+            ],
+            "ui_criteria": {
+              "identity_fields": [
+                "kind_label",
+                "filename",
+                "displayed_size"
+              ],
+              "parent_scope": "note_ref"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "notesnook.attachments.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "notes_and_trash_exhausted"
+            ]
+          }
+        },
+        "result": {
+          "id": "notesnook.attachments.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "downloaded_file": [
+                "downloaded_file",
+                "original_artifact",
+                "app_materialized_file"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "notesnook.attachments.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      },
+      "environment_rationale": {
+        "device_only": "Attempt the implemented save procedure for locally available attachments so cached originals are not skipped; record unavailable files explicitly.",
+        "controlled_online": "Use the attachment-save procedure with remote retrieval available and verify each resulting original."
+      }
+    },
+    {
+      "target_id": "notesnook.export",
+      "item_types": [
+        "note_export"
+      ],
+      "method": "export",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "export_file"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
+      "rules": {
+        "identification": {
+          "id": "notesnook.whole_container_selection",
+          "parameters": {
+            "counted_item_types": [
+              "note_export"
+            ],
+            "ui_criteria": {
+              "minimum_initial_selected": 1,
+              "selection_condition": "select_all_increases_count",
+              "extension": ".zip"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "notesnook.export.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "export_selection_verified"
+            ]
+          }
+        },
+        "result": {
+          "id": "notesnook.export.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "export_file": [
+                "export_file",
+                "original_artifact",
+                "app_export"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "notesnook.export.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      },
+      "environment_rationale": {
+        "device_only": "The native export procedure can operate on available local notes. Attempt the implemented export and record actual authentication or data-availability failures.",
+        "controlled_online": "Allow the same native export procedure after synchronization, subject to the app's authentication and export requirements."
+      }
+    }
+  ],
+  "selectors": {
+    "notesnook.workspace.header": {
+      "selector": {
+        "kind": "content_description",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.workspace.header.content-description",
+        "value": "Search in Notes"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true
+      }
+    },
+    "notesnook.workspace.logged-out": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.workspace.logged-out.text",
+        "value": "You are not logged in"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "notesnook.notes-list": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.notes-list.resource-id",
+        "value": "list.id"
+      },
+      "constraints": {
+        "class_name": "android.widget.ScrollView",
+        "scrollable": true
+      }
+    },
+    "notesnook.note-menu": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.note-menu.resource-id",
+        "value": "listitem.menu"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.side-menu.open": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.side-menu.open.resource-id",
+        "value": "left"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.side-menu.settings": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.side-menu.settings.resource-id",
+        "value": "sidemenu-settings-icon"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.side-menu.notes": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.side-menu.notes.resource-id",
+        "value": "Notes"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.side-menu.trash": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.side-menu.trash.resource-id",
+        "value": "Trash"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.account.sync-now": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.account.sync-now.text",
+        "value": "Sync now"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "notesnook.history.open": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.history.open.resource-id",
+        "value": "icon-history"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.attachments.open": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.attachments.open.resource-id",
+        "value": "icon-attachments"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.trash.header": {
+      "selector": {
+        "kind": "content_description",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.trash.header.content-description",
+        "value": "Search in Trash"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.selection.header": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.selection.header.resource-id",
+        "value": "search-header"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.selection.export": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.selection.export.resource-id",
+        "value": "select-export"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notesnook.export.markdown-frontmatter": {
+      "selector": {
+        "kind": "content_description",
+        "owner_package": "com.streetwriters.notesnook",
+        "selector_id": "notesnook.export.markdown-frontmatter.content-description",
+        "value": ".., Markdown + Frontmatter"
+      },
+      "constraints": {
+        "class_name": "android.view.ViewGroup",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "documentsui.download-root": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.google.android.documentsui",
+        "selector_id": "documentsui.download-root.text",
+        "value": "Download"
+      },
+      "constraints": {
+        "clickable": true
+      }
+    },
+    "documentsui.aura-directory": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.google.android.documentsui",
+        "selector_id": "documentsui.aura-directory.text",
+        "value": "AURA"
+      },
+      "constraints": {
+        "clickable": true
+      }
+    },
+    "documentsui.current-aura": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.google.android.documentsui",
+        "selector_id": "documentsui.current-aura.resource-id",
+        "value": "com.google.android.documentsui:id/header_title"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView",
+        "text": "Files in AURA"
+      }
+    },
+    "documentsui.use-folder": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.google.android.documentsui",
+        "selector_id": "documentsui.use-folder.resource-id",
+        "value": "android:id/button1"
+      },
+      "constraints": {
+        "class_name": "android.widget.Button",
+        "clickable": true
+      }
+    },
+    "documentsui.confirm-folder": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.google.android.documentsui",
+        "selector_id": "documentsui.confirm-folder.resource-id",
+        "value": "android:id/button1"
+      },
+      "constraints": {
+        "class_name": "android.widget.Button",
+        "clickable": true
+      }
+    },
+    "documentsui.android.show-roots": {
+      "selector": {
+        "kind": "content_description",
+        "owner_package": "com.android.documentsui",
+        "selector_id": "documentsui.android.show-roots",
+        "value": "Show roots"
+      },
+      "constraints": {
+        "class_name": "android.widget.ImageButton",
+        "clickable": true
+      }
+    },
+    "documentsui.android.download-root": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.android.documentsui",
+        "selector_id": "documentsui.android.download-root",
+        "value": "Downloads"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "documentsui.android.aura-directory": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.android.documentsui",
+        "selector_id": "documentsui.android.aura-directory",
+        "value": "AURA"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "documentsui.android.toolbar": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.android.documentsui",
+        "selector_id": "documentsui.android.toolbar",
+        "value": "com.android.documentsui:id/toolbar"
+      },
+      "constraints": {}
+    },
+    "documentsui.android.current-aura": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.android.documentsui",
+        "selector_id": "documentsui.android.current-aura",
+        "value": "AURA"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "documentsui.android.use-folder": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.android.documentsui",
+        "selector_id": "documentsui.android.use-folder",
+        "value": "android:id/button1"
+      },
+      "constraints": {
+        "text": "SELECT",
+        "clickable": true
+      }
+    }
+  },
+  "timings": {
+    "default_timeout": 30.0,
+    "poll_interval": 0.2,
+    "application_start_settle": 1.0,
+    "transition_settle": 0.5,
+    "application_return_settle": 1.0,
+    "inventory_probe_interval": 0.25,
+    "export_completion_timeout": 30.0
+  },
+  "parameters": {
+    "inventory_probes": 20,
+    "export_root": "/sdcard/Download/AURA",
+    "history_max_pages": 1000,
+    "history_scroll_ratio": 0.35,
+    "display_patterns": {
+      "attachment_row": "^([^,]+), (.+), File size: (.+)$",
+      "exported_count": "^(\\d+) notes exported$",
+      "exported_file": "^Notes exported as (.+\\.zip) successfully$",
+      "history_label": "^\\d{2}-\\d{2}-\\d{4} .+ -  .+, .+$",
+      "selection_count": "^(\\d+)(?: items?)? selected$",
+      "word_count": "^(\\d+) words?$"
+    },
+    "display_text": {
+      "synced": "Synced ",
+      "syncing": "Syncing",
+      "sync_failed": "Sync failed ",
+      "offline": "(Offline)",
+      "note_item_prefix": "note-item-",
+      "history_restore": "Restore",
+      "history_delete": "Delete permanently",
+      "created_at": "Created at",
+      "last_edited_at": "Last edited at",
+      "deleted_at": "Deleted at",
+      "trash_restore": "Restore",
+      "trash_delete": "Delete",
+      "history_title": "Note history",
+      "history_empty": "No note history available for this device."
+    },
+    "ui_fields": {
+      "buttons.add": "buttons.add",
+      "listitem.menu": "listitem.menu"
+    },
+    "list_parsing": {
+      "cards": {
+        "row": {
+          "clickable": "true"
+        },
+        "fields": {
+          "resource_id": {
+            "attribute": "resource-id"
+          },
+          "content_description": {
+            "attribute": "content-desc"
+          }
+        },
+        "required": [
+          "content_description"
+        ]
+      },
+      "history": {
+        "row": {
+          "class": "android.view.ViewGroup",
+          "clickable": "true"
+        },
+        "fields": {
+          "label": {
+            "attribute": "content-desc"
+          }
+        }
+      }
+    },
+    "note_open_probes": 6,
+    "note_list_scroll_ratio": 0.3
+  }
+}

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import hashlib
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from typing import Any
 
@@ -12,6 +12,41 @@ from .models import ActionRef
 
 class UiTimeout(RuntimeError):
     pass
+
+
+def apply_state(read: Callable[[], bool], target: bool, change: Callable[[], None],
+                verify: Callable[[], bool], record: Callable[..., None]) -> bool:
+    """Change a boolean setting only when needed; callers verify and record it."""
+    before = read()
+    try:
+        if before is not target:
+            change()
+        after = verify()
+    except Exception as error:
+        record("failed", before=before, target=target, after=None, error=error)
+        raise
+    record("success", before=before, target=target, after=after)
+    return after
+
+
+def hierarchy_signature(hierarchy: str | bytes | ET.Element) -> tuple | None:
+    """Compare interaction content, without changing the original evidence tree."""
+    root = hierarchy if isinstance(hierarchy, ET.Element) else ET.fromstring(hierarchy)
+
+    def content(node):
+        system_ui = node.get("package") == "com.android.systemui"
+        if system_ui and node.get("resource-id", "").rsplit("/", 1)[-1] in {
+            "status_bar", "status_bar_container", "navigation_bar_frame", "navigation_bar",
+        }:
+            return None
+        children = tuple(value for child in node if (value := content(child)) is not None)
+        if system_ui and len(node) and not children:
+            return None  # Also omit a window that contained only system bars.
+        attributes = tuple(sorted((key, value) for key, value in node.attrib.items()
+                                  if key != "bounds"))
+        return node.tag, attributes, (node.text or "").strip(), children
+
+    return content(root)
 
 
 class UiRuntime:
@@ -71,35 +106,49 @@ class UiRuntime:
         timeout: float | None = None,
     ) -> ActionRef:
         validate_selector(selector)
-        if not self.wait_until(
-            lambda: self.device.count(selector) == 1,
-            timeout=timeout,
-        ):
-            match_count = self.device.count(selector)
-            stage = "target_not_found" if match_count == 0 else "target_ambiguous"
-            self._failed(
-                name,
-                context,
-                stage,
-                selector=dict(selector),
-                match_count=match_count,
-            )
-            if match_count == 0:
-                raise UiTimeout(f"{name}: target not found")
-            raise UiTimeout(
-                f"{name}: expected exactly one target, found {match_count}"
-            )
-        try:
-            self.device.click(selector)
-        except Exception as error:
-            self._failed(
-                name,
-                context,
-                "device_action_failed",
-                selector=dict(selector),
-                error=type(error).__name__,
-            )
-            raise
+        for attempt in range(2):
+            if not self.wait_until(
+                lambda: self.device.count(selector) == 1,
+                timeout=timeout,
+            ):
+                match_count = self.device.count(selector)
+                stage = "target_not_found" if match_count == 0 else "target_ambiguous"
+                self._failed(
+                    name,
+                    context,
+                    stage,
+                    selector=dict(selector),
+                    match_count=match_count,
+                )
+                if match_count == 0:
+                    raise UiTimeout(f"{name}: target not found")
+                raise UiTimeout(
+                    f"{name}: expected exactly one target, found {match_count}"
+                )
+            try:
+                self.device.click(selector)
+            except Exception as error:
+                # uiautomator2 3.5 reads objInfo before dispatching the tap.
+                # Retry that read failure only; input/transport failures may
+                # already have performed the action and must not be replayed.
+                if (attempt == 0 and type(error).__name__ == "RPCUnknownError"
+                        and "androidx.test.uiautomator.StaleObjectException" in str(error)
+                        and "AutomatorServiceImpl.objInfo(" in str(error)):
+                    self.journal.record_action(name, status="retrying", context=context, details={
+                        "stage": "stale_target_before_click", "selector": dict(selector),
+                        "error": str(error), "retry": 1, "settle_seconds": self.poll_interval,
+                    })
+                    self._sleep(self.poll_interval)
+                    continue
+                self._failed(
+                    name,
+                    context,
+                    "device_action_failed",
+                    selector=dict(selector),
+                    error=type(error).__name__,
+                )
+                raise
+            break
         if expected is not None and not self.wait_for(expected, timeout=timeout):
             self._failed(
                 name,
@@ -210,13 +259,15 @@ class UiRuntime:
         direction: str,
         *,
         duration: float = 0.2,
+        distance_ratio: float | None = None,
         expect_change: bool = False,
         context: dict[str, Any] | None = None,
         timeout: float | None = None,
     ) -> ActionRef:
-        before_hash = self._hierarchy_hash() if expect_change else None
+        before_signature = hierarchy_signature(self.device.hierarchy()) if expect_change else None
         try:
-            self.device.swipe(direction, duration)
+            self.device.swipe(direction, duration, **(
+                {"distance_ratio": distance_ratio} if distance_ratio is not None else {}))
         except Exception as error:
             self._failed(
                 name,
@@ -227,7 +278,7 @@ class UiRuntime:
             )
             raise
         if expect_change and not self.wait_until(
-            lambda: self._hierarchy_hash() != before_hash,
+            lambda: hierarchy_signature(self.device.hierarchy()) != before_signature,
             timeout=timeout,
         ):
             self._failed(
@@ -241,7 +292,8 @@ class UiRuntime:
             name,
             status="success",
             context=context,
-            details={"direction": direction, "duration": duration},
+            details={"direction": direction, "duration": duration,
+                     **({"distance_ratio": distance_ratio} if distance_ratio is not None else {})},
         )
 
     def swipe_bounds(
@@ -282,9 +334,6 @@ class UiRuntime:
                 "distance_ratio": distance_ratio,
             },
         )
-
-    def _hierarchy_hash(self) -> str:
-        return hashlib.sha256(self.device.hierarchy().encode("utf-8")).hexdigest()
 
     def _failed(
         self,

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import sys
 from datetime import datetime
@@ -284,6 +285,32 @@ def _target_rules(target: dict, errors: list[str]) -> dict:
     return rules
 
 
+def _validate_wifi_network(observed, label, errors):
+    network = observed.get("wifi_network")
+    if network is None:
+        return  # Historical records do not contain network observations.
+    label = f"{label} wifi_network"
+    network = _object(network, label, errors)
+    status = network.get("status")
+    if status not in ("observed", "unavailable", "disabled", "not_connected"):
+        errors.append(f"{label} invalid status")
+    if status == "observed":
+        if not isinstance(network.get("ssid"), str) or not network["ssid"] or network.get("reason") is not None:
+            errors.append(f"{label} observed SSID must be a nonempty string with null reason")
+        if observed.get("wifi_connected") is not True:
+            errors.append(f"{label} observed SSID requires a connected state")
+    elif network.get("ssid") is not None or not isinstance(network.get("reason"), str) or not network["reason"]:
+        errors.append(f"{label} unavailable SSID must be null with a reason")
+    if observed.get("wifi_enabled") is not (status != "disabled"):
+        errors.append(f"{label} status disagrees with Wi-Fi power state")
+    if status in ("disabled", "not_connected") and observed.get("wifi_connected") is not False:
+        errors.append(f"{label} status disagrees with Wi-Fi connection state")
+    source = "settings get global wifi_on" if status == "disabled" else "cmd wifi status"
+    if network.get("source") != source:
+        errors.append(f"{label} invalid source")
+    return _timestamp(network.get("observed_at"), f"{label} observed_at", errors)
+
+
 def _validate_state(value, label, errors, *, expected=None):
     state = _object(value, label, errors)
     if state.get("status") in ("observed", "verified"):
@@ -292,6 +319,9 @@ def _validate_state(value, label, errors, *, expected=None):
             if type(observed.get(field)) is not bool:
                 errors.append(f"{label} {field} must be boolean")
         observed_at = _timestamp(state.get("observed_at"), f"{label} observed_at", errors)
+        network_at = _validate_wifi_network(observed, label, errors)
+        if network_at and observed_at and network_at > observed_at:
+            errors.append(f"{label} wifi_network observation is later than enclosing state")
         if expected:
             for field, wanted in expected.items():
                 if observed.get(field) is not wanted:
@@ -317,8 +347,22 @@ def _validate_state(value, label, errors, *, expected=None):
         errors.append(f"{label} invalid observation status")
 
 
+def _validate_timing(record, scope, label, errors):
+    if not any(field in record for field in ("elapsed_seconds", "timing_clock", "timing_scope")):
+        return  # Historical records contain UTC timestamps only.
+    elapsed = record.get("elapsed_seconds")
+    if type(elapsed) not in (int, float) or not math.isfinite(elapsed) or elapsed < 0:
+        errors.append(f"{label} elapsed_seconds must be finite and non-negative")
+    if record.get("timing_clock") != "perf_counter":
+        errors.append(f"{label} timing_clock must be perf_counter")
+    if record.get("timing_scope") != scope:
+        errors.append(f"{label} timing_scope must be {scope}")
+
+
 def _validate_session_records(session, errors):
+    _validate_wifi_network(_object(session.get("initial"), "session initial", errors), "session initial", errors)
     preparation = _object(session.get("preparation"), "session preparation", errors)
+    _validate_timing(preparation, "session_preparation", "session preparation", errors)
     preparation_at = None
     if preparation.get("status") == "verified":
         preparation_at = _validate_state(preparation, "session preparation", errors,
@@ -336,7 +380,31 @@ def _validate_session_records(session, errors):
             errors.append(f"session {field} must be an observed string or null")
     _validate_state(session.get("final_state"), "session final_state", errors)
     if "restoration" in session or "restored_at" in session:
-        errors.append("schema2 session must not contain automatic restoration fields")
+        errors.append("schema2 session must not contain legacy full-environment restoration fields")
+    if session.get("notification_restoration") is not None:
+        label = "session notification_restoration"
+        restoration = _object(session["notification_restoration"], label, errors)
+        initial = _object(session.get("initial"), "session initial", errors)
+        target = _object(restoration.get("target"), f"{label} target", errors)
+        expected = {field: initial.get(field) for field in ("dnd_enabled", "hide_all")}
+        if (target != expected or type(target.get("dnd_enabled")) is not bool
+                or (target.get("hide_all") is not None and type(target["hide_all"]) is not bool)):
+            errors.append(f"{label} target must match initial notification settings")
+        status = restoration.get("status")
+        if status in ("restored", "failed"):
+            _validate_timing(restoration, "notification_restoration", label, errors)
+            _timestamp(restoration.get("started_at"), f"{label} started_at", errors)
+            _timestamp(restoration.get("completed_at"), f"{label} completed_at", errors)
+        elif status == "not_performed":
+            _timestamp(restoration.get("at"), f"{label} at", errors)
+        else:
+            errors.append(f"{label} invalid status")
+        if status == "restored":
+            observed = _object(restoration.get("observed"), f"{label} observed", errors)
+            if observed != target or any(type(observed.get(field)) is not type(value) for field, value in target.items()):
+                errors.append(f"{label} restored observation must match target")
+        elif status in ("failed", "not_performed") and (not restoration.get("error") or not restoration.get("error_type")):
+            errors.append(f"{label} failure must include error and error_type")
     plans = _index(_records(session, "execution_plan", errors), "run_id", errors)
     executions = _index(_records(session, "executions", errors), "run_id", errors)
     installed = _records(session, "installed_apps", errors)
@@ -348,13 +416,14 @@ def _validate_session_records(session, errors):
         online = online or environment == "controlled_online"
         execution = executions.get(run_id)
         if execution:
+            _validate_timing(execution, "execution_including_packaging", run_id, errors)
             started_at = _timestamp(execution.get("started_at"), f"{run_id} execution started_at", errors)
             if preparation_at and started_at and preparation_at > started_at:
                 errors.append(f"{run_id} preparation observed_at must precede execution started_at")
             for field in ("app_id", "method", "acquisition_environment", "order", "status"):
                 if plan.get(field) != execution.get(field):
                     errors.append(f"{run_id} execution {field} does not match execution_plan")
-        elif plan.get("status") != "planned":
+        elif plan.get("status") not in ("planned", "excluded"):
             errors.append(f"{run_id} missing execution: incomplete validation scope")
         matches = [row for row in installed if row.get("app_id") == plan.get("app_id") and row.get("package_name") == plan.get("package_name")]
         if len(matches) != 1:
@@ -364,6 +433,7 @@ def _validate_session_records(session, errors):
                 if plan.get(field) != matches[0].get(other):
                     errors.append(f"{run_id} {field} differs from installed app metadata")
     for transition in _records(session, "environment_transitions", errors):
+        _validate_timing(transition, "environment_transition", "transition", errors)
         environment = transition.get("acquisition_environment")
         if environment not in ("device_only", "controlled_online"):
             errors.append("transition acquisition_environment invalid")
@@ -377,6 +447,161 @@ def _validate_session_records(session, errors):
             if environment == "controlled_online":
                 expected["wifi_connected"] = True
         _validate_state(transition.get("state"), "transition state", errors, expected=expected)
+    _validate_configuration(session, plans, errors)
+    _validate_authority(session, plans, executions, errors)
+    control = session.get("network_control")
+    if control is not None:
+        control = _object(control, "network_control", errors)
+        if (control.get("poc_enforces_traffic_restriction") is not False
+                or control.get("external_control_verified_by_aura") is not False
+                or control.get("external_traffic_restriction") not in ("not_applied", "configured", "not_reported")
+                or not isinstance(control.get("reference"), str)
+                or (control.get("external_traffic_restriction") == "configured" and not control.get("reference", "").strip())):
+            errors.append("network_control must distinguish declarations from PoC enforcement")
+    automation = session.get("automation")
+    if automation is not None:
+        automation = _object(automation, "automation", errors)
+        connection = _object(automation.get("connection"), "automation connection", errors)
+        if connection.get("status") != "unavailable":
+            host = _object(connection.get("host"), "automation host", errors)
+            if not isinstance(host.get("dependencies"), dict):
+                errors.append("automation dependency versions missing")
+            for phase in ("before", "after"):
+                _validate_automation_observation(connection.get(phase), f"automation {phase}", errors)
+        elif not connection.get("reason"):
+            errors.append("unavailable automation connection needs a reason")
+        if "final" in automation:
+            _validate_automation_observation(automation["final"], "automation final", errors)
+
+
+def _validate_automation_observation(value, label, errors):
+    value = _object(value, label, errors)
+    if value.get("status") not in ("observed", "partial", "unavailable"):
+        errors.append(f"{label} invalid status")
+    observations = value.get("observations")
+    if observations is None and value.get("status") == "unavailable" and value.get("error"):
+        _timestamp(value.get("queried_at"), f"{label} queried_at", errors)
+        return
+    observations = _object(observations, f"{label} observations", errors)
+    _timestamp(value.get("observed_at"), f"{label} observed_at", errors)
+    if not {"jar", "companion_packages", "processes", "adb_enabled", "usb_state"} <= observations.keys():
+        errors.append(f"{label} component observations incomplete")
+    statuses = []
+    for name, row in observations.items():
+        row = _object(row, f"{label} {name}", errors)
+        statuses.append(row.get("status"))
+        if row.get("status") not in ("observed", "unavailable") or not isinstance(row.get("command"), str):
+            errors.append(f"{label} {name} invalid observation")
+        if row.get("status") == "observed" and (row.get("returncode") != 0 or not isinstance(row.get("output"), str)):
+            errors.append(f"{label} {name} observed result lacks successful output")
+        if row.get("status") == "unavailable" and not (row.get("error") or row.get("returncode")):
+            errors.append(f"{label} {name} unavailable result lacks query failure")
+        _timestamp(row.get("observed_at", row.get("queried_at")), f"{label} {name} at", errors)
+    expected = "observed" if statuses and all(s == "observed" for s in statuses) else "unavailable" if statuses and all(s == "unavailable" for s in statuses) else "partial"
+    if value.get("status") != expected:
+        errors.append(f"{label} aggregate status contradicts observations")
+
+
+def _validate_configuration(session, plans, errors):
+    record = session.get("configuration")
+    if record is None:
+        if any("configuration_document_sha256" in plan for plan in plans.values()):
+            errors.append("session configuration missing for linked execution plan")
+        return  # Historical sessions have only the authority declaration.
+    record = _object(record, "configuration", errors)
+    document = _object(record.get("document"), "configuration document", errors)
+    fields = {"schema_version", "authorization", "execution_scopes", "network_control"}
+    authority_fields = {"basis_type", "reference", "scope", "confirmed_by", "confirmed_at", "remote_acquisition"}
+    if (set(record) != {"document", "document_sha256"} or set(document) != fields
+            or type(document.get("schema_version")) is not int or document.get("schema_version") != 1
+            or not isinstance(document.get("authorization"), dict)
+            or set(document["authorization"]) != authority_fields):
+        errors.append("session configuration fields or schema_version invalid")
+        return
+    try:
+        digest = _sha256(json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode())
+    except (ValueError, TypeError):
+        errors.append("session configuration cannot be canonically hashed")
+        return
+    if record.get("document_sha256") != digest:
+        errors.append("session configuration document SHA-256 mismatch")
+    projected = {**document["authorization"], "grants": document["execution_scopes"],
+                 "network_control": document["network_control"]}
+    authority = _object(session.get("authorization"), "configuration authorization projection", errors)
+    if projected != authority.get("document"):
+        errors.append("session configuration differs from authorization projection")
+    # Authority validation below independently checks every projected value and grant.
+    for run_id, plan in plans.items():
+        if plan.get("configuration_document_sha256") != digest:
+            errors.append(f"{run_id} configuration document link mismatch")
+
+
+def _validate_authority(session, plans, executions, errors):
+    authority = session.get("authorization")
+    if authority is None:
+        if any("authorization_document_sha256" in plan or plan.get("status") == "excluded" for plan in plans.values()):
+            errors.append("authorization is missing for an authorized/excluded plan")
+        return  # Historical records have no authority extension.
+    authority = _object(authority, "authorization", errors)
+    document = _object(authority.get("document"), "authorization document", errors)
+    digest = _sha256(json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode())
+    if authority.get("document_sha256") != digest:
+        errors.append("authorization document SHA-256 mismatch")
+    required = {"basis_type", "reference", "scope", "confirmed_by", "confirmed_at", "remote_acquisition", "grants"}
+    if not required <= document.keys() or document.keys() - required - {"network_control"}:
+        errors.append("authorization document fields invalid")
+    declaration = document.get("network_control", {"external_traffic_restriction": "not_reported", "reference": ""})
+    if (not isinstance(declaration, dict) or set(declaration) != {"external_traffic_restriction", "reference"}
+            or declaration.get("external_traffic_restriction") not in ("not_applied", "configured", "not_reported")
+            or not isinstance(declaration.get("reference"), str)
+            or (declaration.get("external_traffic_restriction") == "configured" and not declaration.get("reference", "").strip())):
+        errors.append("authorization network_control declaration invalid")
+    elif session.get("network_control") != {"poc_enforces_traffic_restriction": False, "external_control_verified_by_aura": False, **declaration}:
+        errors.append("authorization network_control declaration differs from session")
+    for key in ("basis_type", "reference", "scope", "confirmed_by"):
+        if not isinstance(document.get(key), str) or not document[key].strip():
+            errors.append(f"authorization {key} missing")
+    confirmed = _timestamp(document.get("confirmed_at"), "authorization confirmed_at", errors)
+    prepared = _timestamp(session.get("prepared_at"), "authorization prepared_at", errors)
+    if confirmed and prepared and confirmed > prepared:
+        errors.append("authorization confirmation is later than preparation")
+    remote = document.get("remote_acquisition")
+    if remote not in ("allowed", "denied", "unconfirmed"):
+        errors.append("authorization remote permission invalid")
+    grants = _records(document, "grants", errors)
+    keys = set()
+    for grant in grants:
+        fields = ("app_id", "profile_app_version", "method", "acquisition_environment")
+        if (set(grant) != {*fields, "profile_sha256", "target_ids", "scope_matches_profile"}
+                or not all(isinstance(grant.get(k), str) and grant[k].strip() for k in fields)
+                or grant.get("method") not in ("materialize", "export")
+                or grant.get("acquisition_environment") not in ("device_only", "controlled_online")
+                or grant.get("scope_matches_profile") is not True
+                or not isinstance(grant.get("profile_sha256"), str) or re.fullmatch(r"[0-9a-f]{64}", grant["profile_sha256"]) is None
+                or not _strings(grant.get("target_ids")) or not grant.get("target_ids")
+                or len(set(grant["target_ids"])) != len(grant["target_ids"])):
+            errors.append("authorization grant invalid or has unsupported restrictions")
+            continue
+        key = tuple(grant[k] for k in fields)
+        if key in keys:
+            errors.append("authorization duplicate grant")
+        keys.add(key)
+    if not grants:
+        errors.append("authorization grants missing")
+    for run_id, plan in plans.items():
+        matches = [g for g in grants if all(g.get(k) == plan.get(k) for k in ("app_id", "profile_app_version", "profile_sha256", "method", "acquisition_environment"))
+                   and _strings(g.get("target_ids")) and _strings(plan.get("target_ids"))
+                   and set(g["target_ids"]) == set(plan["target_ids"]) and g.get("scope_matches_profile") is True]
+        remote_denied = plan.get("acquisition_environment") == "controlled_online" and remote != "allowed"
+        allowed = len(matches) == 1 and not remote_denied and plan.get("installed_app_version") == plan.get("profile_app_version")
+        if plan.get("authorization_document_sha256") != digest:
+            errors.append(f"{run_id} authorization document link mismatch")
+        if plan.get("status") == "excluded":
+            reason = f"remote_acquisition_{remote}" if remote_denied else "no_matching_full_scope_grant"
+            if allowed or run_id in executions or plan.get("exclusion_reason") != reason or plan.get("authorization_grant") is not None:
+                errors.append(f"{run_id} invalid authorization exclusion")
+        elif not allowed or plan.get("authorization_grant") != matches[0] or plan.get("exclusion_reason") is not None:
+            errors.append(f"{run_id} execution is not covered by authorization")
 
 
 def _validate_collection_bindings(indexes, documents, run, errors):
@@ -427,10 +652,14 @@ def _validate_collection_bindings(indexes, documents, run, errors):
                               and owner.get("item_type") == "account_context"
                               and artifact.get("kind") == "structured_data"
                               and payload.get("record_kind") == "chrome_account")
-            notion = app_id == "notion" and target == "notion.content" and key == "accounts" and item.get("item_type") == "account" and owner.get("item_type") == "account_collection"
+            notion = app_id == "notion" and target in {"notion.content", "notion.inventory"} and key == "accounts" and item.get("item_type") == "account" and owner.get("item_type") == "account_collection"
+            notion_inventory = (app_id == "notion" and target == "notion.inventory"
+                                and key == "records" and item.get("item_type") == "page_listing"
+                                and owner.get("item_type") == "workspace"
+                                and payload.get("record_kind") == "notion_home_inventory")
             rows = payload.get(key) if isinstance(key, str) else None
             index = source.get("record_index")
-            if (not (browser or notion) or (browser and not (chrome_account or str(owner.get("item_type")).endswith("_collection")))
+            if (not (browser or notion or notion_inventory) or (browser and not (chrome_account or str(owner.get("item_type")).endswith("_collection")))
                     or not isinstance(rows, list) or type(index) is not int or not 0 <= index < len(rows)
                     or not isinstance(rows[index], dict) or not rows[index]):
                 errors.append(f"{label} invalid array key/index/row/scope")
@@ -460,10 +689,13 @@ def _validate_collection_bindings(indexes, documents, run, errors):
                          and kind == "chrome_account"))
                 and isinstance(payload.get("records"), list)):
             expected_count = len(payload["records"])
-        elif (app_id == "notion" and target == "notion.content" and owner.get("item_type") == "account_collection"
+        elif (app_id == "notion" and target in {"notion.content", "notion.inventory"} and owner.get("item_type") == "account_collection"
                 and artifact.get("kind") in ("ui_record", "structured_data")
                 and kind == "notion_accounts" and isinstance(payload.get("accounts"), list)):
             expected_count = len(payload["accounts"])
+        elif (app_id == "notion" and target == "notion.inventory" and owner.get("item_type") == "workspace"
+                and kind == "notion_home_inventory" and isinstance(payload.get("records"), list)):
+            expected_count = len(payload["records"])
         elif (app_id == "telegram" and target == "telegram.conversations" and owner.get("item_type") == "conversation"
                 and artifact.get("kind") == "ui_record" and kind == "message"):
             expected_count = 1
@@ -559,7 +791,22 @@ def _validate_schema2(acquisition, indexes, events, members, execution, session,
     if outcome.get("status") not in ("complete", "partial", "failed", "unresolved", "interrupted") or outcome.get("status") != execution.get("status"):
         errors.append(f"{label} run outcome status does not match execution")
     profile = _object(acquisition.get("profile"), f"{label} profile", errors)
+    if session.get("authorization") is not None:
+        fingerprint = _sha256(json.dumps(profile, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode())
+        if plan.get("profile_sha256") != fingerprint:
+            errors.append(f"{label} authorization profile SHA-256 mismatch")
     condition = _object(run.get("condition"), f"{label} condition", errors)
+    if session.get("authorization") is not None or "authorization" in condition:
+        authority = _object(session.get("authorization"), "session authorization", errors)
+        expected_authority = {"document_sha256": authority.get("document_sha256"), "grant": plan.get("authorization_grant")}
+        if condition.get("authorization") != expected_authority:
+            errors.append(f"{label} authorization condition does not match session/plan")
+    if session.get("configuration") is not None or "configuration_document_sha256" in condition:
+        config = _object(session.get("configuration"), "session configuration", errors)
+        if condition.get("configuration_document_sha256") != config.get("document_sha256"):
+            errors.append(f"{label} configuration condition does not match session")
+    if condition.get("network_control") != session.get("network_control"):
+        errors.append(f"{label} network_control does not match session")
     environment = condition.get("acquisition_environment")
     if environment not in ("device_only", "controlled_online"):
         errors.append(f"{label} invalid acquisition_environment")
@@ -609,12 +856,32 @@ def _validate_schema2(acquisition, indexes, events, members, execution, session,
     applicable = {}
     for key, target in targets.items():
         environments = target.get("acquisition_environments")
+        rationale = target.get("environment_rationale")
+        if rationale is not None and (
+            not isinstance(rationale, dict)
+            or set(rationale) != {"device_only", "controlled_online"}
+            or any(not isinstance(reason, str) or not reason.strip() for reason in rationale.values())
+        ):
+            errors.append(f"{key} invalid environment_rationale")
+        remote = target.get("remote_access_environments")
+        if remote is not None and (not isinstance(environments, list) or remote != [e for e in environments if e == "controlled_online"]):
+            errors.append(f"{key} remote_access_environments contradict acquisition environments")
         if not _strings(environments) or any(value not in ("device_only", "controlled_online") for value in environments):
             errors.append(f"{key} invalid acquisition_environments")
         elif environment in environments:
             applicable[key] = target
         if target.get("method") not in ("materialize", "export"):
             errors.append(f"{key} invalid target method")
+    if "excluded_targets" in acquisition:
+        excluded = _index(_records(acquisition, "excluded_targets", errors), "target_id", errors)
+        if set(excluded) != set(targets) - set(applicable):
+            errors.append(f"{label} excluded_targets do not match profile environments")
+        for key, record in excluded.items():
+            if (record.get("acquisition_environment") != environment
+                    or record.get("procedure_status") != "not_attempted"
+                    or record.get("acquisition_status") is not None
+                    or record.get("reason") != "profile_environment_excluded"):
+                errors.append(f"{key} invalid profile exclusion record")
     planned_targets = [key for key, target in applicable.items() if target.get("method") == run.get("route")]
     if plan.get("target_ids") != planned_targets:
         errors.append(f"{label} target_ids do not match applicable profile targets")
@@ -737,10 +1004,18 @@ def _validate_schema2(acquisition, indexes, events, members, execution, session,
         source = record.get("source_snapshot_id")
         if source is not None and (not isinstance(source, str) or not source.startswith(str(run.get("app_id")) + "-snapshot:") or source == observation_id):
             errors.append(f"{observation_id} invalid distinct source_snapshot_id")
+    outcomes_by_attempt = {}
     for outcome_id, outcome in indexes["outcomes"].items():
         attempt = _reference(attempts, outcome.get("attempt_id"), f"{outcome_id} unknown attempt", errors)
+        if isinstance(outcome.get("attempt_id"), str):
+            outcomes_by_attempt.setdefault(outcome["attempt_id"], []).append(outcome_id)
         if outcome.get("acquisition_status") != attempt.get("acquisition_status") or outcome.get("reason") != attempt.get("reason") or outcome.get("details") != attempt.get("details"):
             errors.append(f"{outcome_id} outcome does not match attempt status/reason/details")
+    for attempt_id, attempt in attempts.items():
+        required = attempt.get("acquisition_status") in ("partial", "not_acquired")
+        count = len(outcomes_by_attempt.get(attempt_id, []))
+        if count != int(required):
+            errors.append(f"{attempt_id} must have exactly one outcome for partial/not_acquired and none otherwise")
     for artifact_id, artifact in artifacts.items():
         action = _lookup(actions, artifact.get("action_id"))
         if action.get("status") != "success" or action.get("action") != artifact.get("action"):
@@ -749,6 +1024,7 @@ def _validate_schema2(acquisition, indexes, events, members, execution, session,
     retained_events = {}
     finished_events = {}
     identification_events = {}
+    outcome_events = {}
     for event in events:
         event_id = str(event.get("event_id"))
         context = _object(event.get("context"), f"{event_id} context", errors)
@@ -777,6 +1053,16 @@ def _validate_schema2(acquisition, indexes, events, members, execution, session,
                     errors.append(f"{event_id} artifact {field} mismatch")
             if details.get("path") != artifact.get("relative_path"):
                 errors.append(f"{event_id} artifact path mismatch")
+        elif event.get("event_type") == "acquisition_outcome":
+            outcome_id = details.get("outcome_id")
+            if isinstance(outcome_id, str):
+                outcome_events.setdefault(outcome_id, []).append(event)
+            outcome = _reference(indexes["outcomes"], outcome_id, f"{event_id} unknown acquisition_outcome", errors)
+            expected_details = {"outcome_id": outcome_id, "reason": outcome.get("reason"),
+                                "action_id": outcome.get("action_id"), "observation_id": outcome.get("observation_id"),
+                                **_object(outcome.get("details"), f"{outcome_id} details", errors)}
+            if event.get("status") != outcome.get("acquisition_status") or attempt_id != outcome.get("attempt_id") or details != expected_details:
+                errors.append(f"{event_id} acquisition_outcome does not match outcome status/references/details")
         elif event.get("event_type") == "attempt_finished":
             if isinstance(attempt_id, str):
                 finished_events.setdefault(attempt_id, []).append(event)
@@ -800,6 +1086,9 @@ def _validate_schema2(acquisition, indexes, events, members, execution, session,
     for attempt_id in attempts:
         if len(finished_events.get(attempt_id, [])) != 1:
             errors.append(f"{attempt_id} must have exactly one attempt_finished event")
+    for outcome_id in indexes["outcomes"]:
+        if len(outcome_events.get(outcome_id, [])) != 1:
+            errors.append(f"{outcome_id} must have exactly one acquisition_outcome event")
     for target_id, record in identifications.items():
         for status in ("started", "completed", "interrupted"):
             expected = int(record.get("identification_status") in ("completed", "interrupted") and (status == "started" or status == record.get("identification_status")))
@@ -919,6 +1208,8 @@ def _validate_archive(
         "execution": execution,
         "run": run,
         "indexes": indexes,
+        "profile": acquisition.get("profile"),
+        "identifications": acquisition.get("identifications", []),
     }
 
 

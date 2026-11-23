@@ -1,19 +1,30 @@
 """Notion 0.6.4030 attachment parsing and materialization."""
 
 from __future__ import annotations
+from ...artifacts import (
+    pull_bytes,
+    displayed_size_matches,
+    select_inventory_file,
+    parse_inventory,
+    nul_inventory_command as _inventory_command,
+)
+
+
+from ...collection import poll_samples, stability_probe
 
 import hashlib
 import re
-import shlex
-import time
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping
-from pathlib import Path, PurePosixPath
-from tempfile import TemporaryDirectory
+from pathlib import PurePosixPath
 
+from ...models import AcquisitionStatus, ProcedureStatus
 from .support import (
     NotionCollectorError,
+    node_label,
+    property_text_cells,
     bounds,
+    dismiss_page_keyboard,
     observe,
     item_attempt,
     onscreen,
@@ -72,9 +83,9 @@ def _parents(root: ET.Element) -> dict[ET.Element, ET.Element]:
 
 def _labels(node: ET.Element) -> set[str]:
     return {
-        child.get("content-desc", "").strip()
+        node_label(child)
         for child in node.iter()
-        if onscreen(child) and child.get("content-desc", "").strip()
+        if onscreen(child, node) and node_label(child)
     }
 
 
@@ -115,7 +126,7 @@ def parse_page_candidates(
     result = []
     parents = _parents(root)
     for node in root.iter():
-        if not onscreen(node):
+        if not onscreen(node, root):
             continue
         class_name = node.get("class", "")
         text = node.get("text", "").strip()
@@ -162,7 +173,7 @@ def parse_page_candidates(
         if (
             class_name == "android.widget.Button"
             and node.get("clickable") == "true"
-            and node.get("content-desc") == "Open block actions menu"
+            and node_label(node) == "Open block actions menu"
             and _container(
                 node,
                 parents,
@@ -185,8 +196,7 @@ def parse_page_candidates(
         if (
             class_name == "android.widget.Button"
             and node.get("clickable") == "true"
-            and not text
-            and not node.get("content-desc", "").strip()
+            and node_label(node) in {"", "show more media controls"}
         ):
             audio = _container(
                 node,
@@ -196,7 +206,7 @@ def parse_page_candidates(
                     and "enter full screen" not in _labels(parent)
                     and any(
                         child.get("class") == "android.widget.SeekBar"
-                        and onscreen(child)
+                        and onscreen(child, root)
                         for child in parent.iter()
                     )
                 ),
@@ -213,7 +223,7 @@ def parse_page_candidates(
     blockers = [
         bounds(node)
         for node in root.iter()
-        if onscreen(node)
+        if onscreen(node, root)
         and node.get("resource-id", "").startswith("floating-toolbar.")
     ]
     result = [
@@ -239,10 +249,8 @@ def parse_database_property_candidates(
 ) -> tuple[dict[str, object], ...]:
     labels = [
         node
-        for node in root.iter()
-        if onscreen(node)
-        and node.get("class") == "android.view.View"
-        and node.get("text", "").strip() == "Files & media"
+        for node in property_text_cells(root)
+        if node.get("text", "").strip() == "Files & media"
     ]
     if not labels:
         return ()
@@ -254,7 +262,7 @@ def parse_database_property_candidates(
     result = []
     for node in root.iter():
         if (
-            not onscreen(node)
+            not onscreen(node, root)
             or node.get("class") != "android.widget.Button"
             or node.get("clickable") != "true"
             or not node.get("text", "").strip()
@@ -281,14 +289,11 @@ def parse_database_property_candidates(
 def _bottom_actions(
     root: ET.Element,
 ) -> tuple[ET.Element, ...]:
-    return tuple(
-        node
-        for node in root.iter()
-        if onscreen(node)
-        and node.get("class") == "android.view.View"
-        and node.get("clickable") == "true"
-        and bounds(node)[1] >= 2000
-    )
+    actions = [node for node in root.iter()
+               if onscreen(node, root) and node.get("class") == "android.view.View"
+               and node.get("clickable") == "true" and node.get("enabled") != "false"]
+    bottom_row = max((bounds(node)[1] for node in actions), default=None)
+    return tuple(node for node in actions if bounds(node)[1] == bottom_row)
 
 
 def parse_materialize_control(
@@ -301,13 +306,13 @@ def parse_materialize_control(
         pagers = [
             node
             for node in root.iter()
-            if onscreen(node)
+            if onscreen(node, root)
             and node.get("resource-id") == "notion.id:id/imagesPager"
         ]
         downloads = [
             node
             for node in root.iter()
-            if onscreen(node)
+            if onscreen(node, root)
             and node.get("resource-id") == "notion.id:id/download"
             and node.get("clickable") == "true"
         ]
@@ -317,9 +322,9 @@ def parse_materialize_control(
         downloads = [
             node
             for node in root.iter()
-            if onscreen(node)
+            if onscreen(node, root)
             and node.get("class") == "android.view.MenuItem"
-            and node.get("content-desc") == "download media"
+            and node_label(node) == "download media"
             and node.get("clickable") == "true"
         ]
         if len(downloads) == 1:
@@ -329,7 +334,7 @@ def parse_materialize_control(
             names = [
                 node
                 for node in root.iter()
-                if onscreen(node)
+                if onscreen(node, root)
                 and node.get("class") == "android.widget.TextView"
                 and node.get("text", "").strip() == expected_filename
             ]
@@ -341,13 +346,13 @@ def parse_materialize_control(
         else:
             verified = (
                 any(
-                    onscreen(node)
+                    onscreen(node, root)
                     and node.get("class") == "android.widget.Button"
-                    and node.get("content-desc") == "play"
+                    and node_label(node) == "play"
                     for node in root.iter()
                 )
                 and any(
-                    onscreen(node)
+                    onscreen(node, root)
                     and node.get("class") == "android.widget.SeekBar"
                     for node in root.iter()
                 )
@@ -362,24 +367,11 @@ def parse_materialize_control(
     )
 
 
-def select_changed_file(
-    before: tuple[tuple[str, int, int], ...],
-    after: tuple[tuple[str, int, int], ...],
-) -> tuple[str, int, int]:
-    previous = {
-        path: (size, mtime)
-        for path, size, mtime in before
-    }
-    changed = [
-        row
-        for row in after
-        if previous.get(row[0]) != row[1:]
-    ]
-    if len(changed) != 1:
-        raise AttachmentCollectionError(
-            "notion_attachment_inventory_ambiguous"
-        )
-    return changed[0]
+def select_changed_file(before, after):
+    try:
+        return select_inventory_file(before, after)[0]
+    except ValueError:
+        raise AttachmentCollectionError('notion_attachment_inventory_ambiguous') from None
 
 
 def _profile(context):
@@ -390,9 +382,6 @@ def _profile(context):
                 "attachment_roots"
             ]
         )
-        probes = int(
-            context.app_profile.parameters["inventory_probes"]
-        )
         interval = float(
             context.app_profile.timings[
                 "inventory_probe_interval"
@@ -402,90 +391,55 @@ def _profile(context):
         raise AttachmentCollectionError(
             "notion_attachment_profile_invalid"
         ) from None
-    if roots != _ATTACHMENT_ROOTS or probes < 2 or interval < 0:
+    if roots != _ATTACHMENT_ROOTS or interval < 0:
         raise AttachmentCollectionError(
             "notion_attachment_profile_invalid"
         )
-    return roots, probes, interval
+    return roots, interval
 
 
-def _inventory_command(
-    roots: tuple[PurePosixPath, ...],
-) -> str:
-    values = " ".join(
-        shlex.quote(root.as_posix()) for root in roots
-    )
-    emit = (
-        'for file do printf "%s\\000%s\\000%s\\000" "$file" '
-        '"$(stat -c %s "$file")" "$(stat -c %Y "$file")"; done'
-    )
-    return (
-        f"for root in {values}; do "
-        '[ ! -d "$root" ] || find "$root" -mindepth 1 -type f '
-        f"-exec sh -c {shlex.quote(emit)} sh {{}} +; done"
-    )
 
 
-def _scan_files(
-    context,
-    roots: tuple[PurePosixPath, ...],
-) -> tuple[tuple[str, int, int], ...]:
+
+def _scan_files(context, roots):
     output = context.device.shell(_inventory_command(roots))
-    fields = output.split("\0")
-    if fields[-1:] != [""]:
-        raise AttachmentCollectionError(
-            "notion_attachment_inventory_invalid"
-        )
-    fields.pop()
-    if len(fields) % 3:
-        raise AttachmentCollectionError(
-            "notion_attachment_inventory_invalid"
-        )
-    records = []
-    for index in range(0, len(fields), 3):
-        remote, size_raw, mtime_raw = fields[index:index + 3]
-        path = PurePosixPath(remote)
-        try:
-            size, mtime = int(size_raw), int(mtime_raw)
-        except ValueError:
-            raise AttachmentCollectionError(
-                "notion_attachment_inventory_invalid"
-            ) from None
-        if (
-            not path.is_absolute()
-            or ".." in path.parts
-            or not any(path.is_relative_to(root) for root in roots)
-            or size < 0
-            or mtime < 0
-        ):
-            raise AttachmentCollectionError(
-                "notion_attachment_inventory_invalid"
-            )
-        records.append((path.as_posix(), size, mtime))
-    if len({row[0] for row in records}) != len(records):
-        raise AttachmentCollectionError(
-            "notion_attachment_inventory_invalid"
-        )
-    return tuple(sorted(records))
+    try:
+        return parse_inventory(output, roots, format='nul_triples')
+    except ValueError:
+        raise AttachmentCollectionError('notion_attachment_inventory_invalid') from None
 
 
-def _await_stable_change(context, roots, baseline):
-    _, probes, interval = _profile(context)
-    previous = None
-    for probe in range(probes):
-        if probe:
-            time.sleep(interval)
+def _await_attachment(context, roots, baseline, displayed_size):
+    _, interval = _profile(context)
+    last_reason = "notion_attachment_inventory_did_not_settle"
+    def candidate():
+        nonlocal last_reason
         current = _scan_files(context, roots)
         try:
-            changed = select_changed_file(baseline, current)
+            selected = select_changed_file(baseline, current)
         except AttachmentCollectionError:
-            changed = None
-        if changed is not None and changed == previous:
-            return changed
-        previous = changed
-    raise AttachmentCollectionError(
-        "notion_attachment_inventory_did_not_settle"
-    )
+            return None
+        if not displayed_size_matches(selected[1], displayed_size, allow_empty=True):
+            last_reason = "notion_attachment_display_size_mismatch"
+            return None
+        return selected
+    stable, state = stability_probe(candidate,
+        stable_for=context.app_profile.timings["inventory_stable_for"])
+    for ready in poll_samples(stable,
+            timeout=context.app_profile.timings["attachment_download_timeout"], interval=interval):
+        if not ready:
+            continue
+        selected = state["key"]
+        remote_path, size, _ = selected
+        payload = pull_bytes(context.device, remote_path, filename='attachment')
+        if len(payload) != size:
+            last_reason = "notion_attachment_size_changed"
+            continue
+        if candidate() != selected:
+            last_reason = "notion_attachment_postpull_changed"
+            continue
+        return remote_path, payload
+    raise AttachmentCollectionError(last_reason)
 
 
 def _action_name(sequence, stem: str) -> str:
@@ -496,21 +450,21 @@ def _video_original_bounds(root: ET.Element):
     headings = [
         node
         for node in root.iter()
-        if onscreen(node)
+        if onscreen(node, root)
         and node.get("class") == "android.widget.TextView"
         and node.get("text", "").strip() == "Actions"
     ]
     types = [
         node
         for node in root.iter()
-        if onscreen(node)
+        if onscreen(node, root)
         and node.get("class") == "android.widget.TextView"
         and node.get("text", "").strip() == "Video"
     ]
     originals = [
         node
         for node in root.iter()
-        if onscreen(node)
+        if onscreen(node, root)
         and node.get("class") == "android.view.View"
         and node.get("text", "").strip() == "View original"
     ]
@@ -628,7 +582,11 @@ def _return_to_parent(
             "notion_attachment_parent_restore_failed",
             action=return_action,
         )
-    return return_action, returned
+    try:
+        return dismiss_page_keyboard(context, sequence, return_action, returned,
+            linked={**dict(linked), "attachment_ref": attachment_ref}, verify_parent=verify_parent)
+    except NotionCollectorError as error:
+        raise AttachmentCollectionError(str(error), action=return_action) from error
 
 
 def materialize_candidate(
@@ -644,7 +602,7 @@ def materialize_candidate(
     verify_parent,
 ):
     kind = str(candidate["kind"])
-    item_attempt(context, {**dict(linked), "attachment_ref": attachment_ref}, retention=False)
+    attempt_id = item_attempt(context, {**dict(linked), "attachment_ref": attachment_ref}, retention=False)
     base_record = {
         "schema_version": "1.0",
         "record_kind": "notion_attachment",
@@ -691,7 +649,7 @@ def materialize_candidate(
         )
         return entry_action, dict(observation), record
 
-    roots, _, _ = _profile(context)
+    roots, _ = _profile(context)
     baseline = _scan_files(context, roots)
     open_action = context.ui.click_bounds(
         _action_name(sequence, "notion_open_attachment"),
@@ -744,16 +702,16 @@ def materialize_candidate(
             "reason_code": "notion_attachment_control_unavailable",
             "source": source,
         }
-        _write_attachment(
-            context,
-            parent_prefix=parent_prefix,
-            attachment_ref=attachment_ref,
-            linked=linked,
-            record=record,
-            source=source,
-            action=control_action,
-        )
-        return control_action, control_observation, record
+        try:
+            return_action, returned = dismiss_page_keyboard(
+                context, sequence, control_action, control_observation,
+                linked={**dict(linked), "attachment_ref": attachment_ref}, verify_parent=verify_parent)
+        except NotionCollectorError as error:
+            raise AttachmentCollectionError(str(error), action=control_action, attachments=(record,)) from error
+        finally:
+            _write_attachment(context, parent_prefix=parent_prefix, attachment_ref=attachment_ref,
+                              linked=linked, record=record, source=source, action=control_action)
+        return return_action, returned, record
     if kind == "video":
         original_action = context.ui.click_bounds(
             _action_name(sequence, "notion_view_attachment_original"),
@@ -770,33 +728,25 @@ def materialize_candidate(
                 "observation_notion_attachment_preview",
             ),
             original_action,
+            parser=lambda root: parse_materialize_control(root, kind=kind,
+                                                           expected_filename=expected_filename),
+            timeout=context.app_profile.timings["attachment_preview_timeout"],
         )
         control_action = original_action
-        control_bounds = parse_materialize_control(
-            control_observation["root"],
-            kind=kind,
-            expected_filename=expected_filename,
-        )
+        control_bounds = control_observation["parsed"]
     download_action = context.ui.click_bounds(
         _action_name(sequence, "notion_download_attachment"),
         control_bounds,
         context={**dict(linked), "attachment_ref": attachment_ref},
     )
     try:
-        remote_path, size, _ = _await_stable_change(
+        remote_path, payload = _await_attachment(
             context,
             roots,
             baseline,
+            candidate.get("displayed_size"),
         )
-        with TemporaryDirectory() as directory:
-            local = Path(directory) / "attachment"
-            context.device.pull(remote_path, local)
-            payload = local.read_bytes()
-        if len(payload) != size:
-            raise AttachmentCollectionError(
-                "notion_attachment_size_changed",
-                action=download_action,
-            )
+        size = len(payload)
     except Exception as error:
         reason = (
             error.reason_code
@@ -850,15 +800,6 @@ def materialize_candidate(
         context={**dict(linked), "attachment_ref": attachment_ref},
         details={"device_source_path": remote_path, "size": size},
     )
-    _, returned = _return_to_parent(
-        context,
-        sequence,
-        kind=kind,
-        linked=linked,
-        attachment_ref=attachment_ref,
-        last_action=download_action,
-        verify_parent=verify_parent,
-    )
     basename = PurePosixPath(remote_path).name
     source_prefix = _attachment_prefix(
         parent_prefix,
@@ -882,14 +823,40 @@ def materialize_candidate(
         "reason_code": None,
         "source": source,
     }
-    _write_attachment(
-        context,
-        parent_prefix=parent_prefix,
-        attachment_ref=attachment_ref,
-        linked=linked,
-        record=record,
-        source=source,
-        action=pull_action,
-        payload=payload,
-    )
+    try:
+        try:
+            _, returned = _return_to_parent(
+                context,
+                sequence,
+                kind=kind,
+                linked=linked,
+                attachment_ref=attachment_ref,
+                last_action=download_action,
+                verify_parent=verify_parent,
+            )
+        finally:
+            _write_attachment(
+                context,
+                parent_prefix=parent_prefix,
+                attachment_ref=attachment_ref,
+                linked=linked,
+                record=record,
+                source=source,
+                action=pull_action,
+                payload=payload,
+            )
+    except Exception as failure:
+        error = AttachmentCollectionError(
+            "notion_attachment_parent_restore_failed",
+            action=getattr(failure, "action", None) or pull_action,
+            attachments=(record,),
+        )
+        context.finish_attempt(
+            attempt_id, ProcedureStatus.INTERRUPTED, AcquisitionStatus.ACQUIRED,
+            reason=error.reason_code,
+            observation_id=source["observation_id"],
+            details={"error_type": type(failure).__name__, "error": str(failure)},
+        )
+        raise error from failure
+    context.finish_attempt(attempt_id, ProcedureStatus.COMPLETED, AcquisitionStatus.ACQUIRED)
     return pull_action, returned, record

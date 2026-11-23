@@ -22,6 +22,9 @@
         "structured_data",
         "ui_observation"
       ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
       "rules": {
         "identification": {
           "id": "google_drive.parse_listing_and_information",
@@ -39,7 +42,7 @@
                 "folder",
                 "file"
               ],
-              "include_activity": "controlled_online"
+              "include_activity": false
             }
           }
         },
@@ -73,6 +76,77 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "Cached My Drive listings and basic file/folder metadata can be exposed offline. Retain them without activity traversal or Download requests.",
+        "controlled_online": "Retain folder/file listings and basic metadata with server refresh available. Activity and original files have separate targets and outcomes."
+      }
+    },
+    {
+      "target_id": "google_drive.activity",
+      "item_types": [
+        "activity_history"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "ui_observation"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
+      "rules": {
+        "identification": {
+          "id": "google_drive.parse_activity",
+          "parameters": {
+            "counted_item_types": [
+              "activity_history"
+            ],
+            "ui_criteria": {
+              "identity_fields": [
+                "drive_path",
+                "kind"
+              ]
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "google_drive.activity.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "recursive_listing_exhausted"
+            ]
+          }
+        },
+        "result": {
+          "id": "google_drive.activity.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "ui_observation": [
+                "screen_image",
+                "ui_hierarchy"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "google_drive.activity.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      },
+      "environment_rationale": {
+        "device_only": "Activity history can require server refresh and was unavailable or incomplete in device-only checks. The profile excludes activity traversal offline.",
+        "controlled_online": "Network access permits requesting activity history from the information view; record unavailable or incomplete activity independently of basic metadata."
       }
     },
     {
@@ -88,6 +162,9 @@
         "file",
         "ui_observation"
       ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
       "rules": {
         "identification": {
           "id": "google_drive.listed_file_download",
@@ -100,7 +177,6 @@
                 "drive_path",
                 "name"
               ],
-              "environment": "controlled_online",
               "selection": "changed_download_inventory"
             }
           }
@@ -135,6 +211,10 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "An offline Download request may be queued and execute after connectivity returns, obscuring attribution. Exclude Download actions even when a cached copy might exist.",
+        "controlled_online": "Request originals with connectivity available and verify resulting files. Retain the pending-request attribution check for unresolved earlier requests."
       }
     }
   ],
@@ -202,8 +282,121 @@
     "inventory_probe_interval": 0.5
   },
   "parameters": {
+    "menu_scroll_ratio": 0.2,
     "root_label": "My Drive",
     "download_root": "/sdcard/Download",
-    "inventory_probes": 20
+    "inventory_probes": 20,
+    "ui_fields": {
+      "created_text": "created_text",
+      "kind_text": "kind_text",
+      "location_text": "location_text",
+      "modified_text": "modified_text",
+      "more_actions_button": "more_actions_button",
+      "private_acl": "private_acl",
+      "quota_text": "quota_text",
+      "recent_event_eventType": "recent_event_eventType",
+      "recent_event_timestamp": "recent_event_timestamp",
+      "recent_event_username": "recent_event_username",
+      "recents_status": "recents_status",
+      "scrollList": "scrollList",
+      "size_text": "size_text",
+      "toolbar": "toolbar",
+      "scanner_fab": "scanner_fab",
+      "fab_compose_view": "fab_compose_view",
+      "bottom_navigation": "bottom_navigation"
+    },
+    "display_patterns": {
+      "activity_error": "(?:can't|couldn't|cannot|unable to) load activity"
+    },
+    "display_text": {
+      "more_actions_prefix": "More actions for ",
+      "folder_type": "Folder",
+      "modified_label": "Modified",
+      "information_prefix": "Showing item properties for ",
+      "activity_end_prefix": "No activity recorded before ",
+      "empty_folder": "This folder is empty"
+    },
+    "list_parsing": {
+      "information": {
+        "row": {},
+        "fields": {
+          "type": {
+            "resource_id": "kind_text",
+            "attribute": [
+              "text",
+              "content-desc"
+            ]
+          },
+          "location": {
+            "resource_id": "location_text",
+            "attribute": [
+              "text",
+              "content-desc"
+            ]
+          },
+          "size": {
+            "resource_id": "size_text",
+            "attribute": [
+              "text",
+              "content-desc"
+            ]
+          },
+          "storage_used": {
+            "resource_id": "quota_text",
+            "attribute": [
+              "text",
+              "content-desc"
+            ]
+          },
+          "created": {
+            "resource_id": "created_text",
+            "attribute": [
+              "text",
+              "content-desc"
+            ]
+          },
+          "modified": {
+            "resource_id": "modified_text",
+            "attribute": [
+              "text",
+              "content-desc"
+            ]
+          }
+        }
+      },
+      "activity": {
+        "row": {},
+        "fields": {
+          "actor": {
+            "resource_id": "recent_event_username",
+            "scope": "children",
+            "attribute": [
+              "text",
+              "content-desc"
+            ]
+          },
+          "displayed_time": {
+            "resource_id": "recent_event_timestamp",
+            "scope": "children",
+            "attribute": [
+              "text",
+              "content-desc"
+            ]
+          },
+          "event": {
+            "resource_id": "recent_event_eventType",
+            "scope": "children",
+            "attribute": [
+              "text",
+              "content-desc"
+            ]
+          }
+        },
+        "required": [
+          "actor",
+          "event"
+        ]
+      }
+    }
   }
 }

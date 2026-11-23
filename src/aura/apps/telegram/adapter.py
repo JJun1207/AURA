@@ -1,6 +1,18 @@
 """Compatibility bridge from the Telegram collector to the AURA runtime."""
 
 from __future__ import annotations
+from ...runtime import record_snapshot, RunContext, source_snapshot_references
+from ...artifacts import pull_bytes, parse_inventory, changed_inventory
+from ...collection import (
+    stability_probe,
+    selector_conditions,
+    selector_entry,
+    poll_samples,
+    first_stable,
+    matching_nodes,
+)
+
+
 
 import hashlib
 import json
@@ -10,8 +22,7 @@ import time
 from datetime import datetime
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Mapping
-from pathlib import Path, PurePosixPath
-from tempfile import TemporaryDirectory
+from pathlib import PurePosixPath
 from typing import Any
 
 from ...device import Bounds, validate_selector
@@ -20,46 +31,25 @@ from ...models import (
     ActionRef,
     ProcedureStatus,
 )
-from ...runtime import RunContext, source_snapshot_references
+from ...ui import hierarchy_signature
 
 
 PACKAGE = "org.telegram.messenger"
-SELECTOR_ATTRIBUTES = {
-    "class_name": "class",
-    "content_description": "content-desc",
-    "text": "text",
-}
-UIAUTOMATOR_KEYS = {
-    "class_name": "className",
-    "content_description": "description",
-    "text": "text",
-}
-CONSTRAINT_ATTRIBUTES = {
-    **SELECTOR_ATTRIBUTES,
-    "checked": "checked",
-    "clickable": "clickable",
-    "focusable": "focusable",
-    "scrollable": "scrollable",
-}
-CONSTRAINT_UIAUTOMATOR_KEYS = {
-    **UIAUTOMATOR_KEYS,
-    "checked": "checked",
-    "clickable": "clickable",
-    "focusable": "focusable",
-    "scrollable": "scrollable",
-}
 _DOWNLOAD_ROOT = PurePosixPath("/sdcard/Download")
 _SUFFIX = re.compile(r"^\.[a-zA-Z0-9]+$")
 _LOGICAL_CHATROOM_ID = re.compile(r"^telegram-chat-[0-9a-f]{64}$")
 _CONTAINER_REF = re.compile(r"^container-\d{6}$")
 _UNSAFE_PATH_LABEL = re.compile(r"[/\\\x00-\x1f\x7f]")
-# ponytail: S21/12.9.0 and S8/12.9.2 calibration; profile it only after a
-# tested device or version demonstrates a different transition interval.
-_TRANSITION_SETTLE_SECONDS = 0.5
+
+
+SELECTOR_KINDS = {'class_name', 'content_description', 'text'}
+CONSTRAINT_KINDS = SELECTOR_KINDS | {"checked", "clickable", "focusable", "scrollable"}
 
 
 class TelegramAdapterError(RuntimeError):
-    pass
+    def __init__(self, message, *, diagnostics=None):
+        super().__init__(message)
+        self.diagnostics = diagnostics
 
 
 def normalize_retained_basename(value: str) -> str:
@@ -112,35 +102,11 @@ def _external_snapshot_command(roots: tuple[PurePosixPath, ...]) -> str:
     )
 
 
-def _parse_file_inventory(
-    output: str,
-    roots: tuple[PurePosixPath, ...],
-    label: str,
-) -> tuple[tuple[str, int, int], ...]:
-    records = []
-    for line in output.splitlines():
-        fields = line.rsplit("\t", 2)
-        if len(fields) != 3:
-            raise TelegramAdapterError(f"{label} inventory is invalid")
-        remote, size_raw, mtime_raw = fields
-        path = PurePosixPath(remote)
-        try:
-            size, mtime = int(size_raw), int(mtime_raw)
-        except ValueError:
-            raise TelegramAdapterError(f"{label} inventory is invalid") from None
-        if (
-            not path.is_absolute()
-            or ".." in path.parts
-            or path in roots
-            or not any(path.is_relative_to(root) for root in roots)
-            or size < 0
-            or mtime < 0
-        ):
-            raise TelegramAdapterError(f"{label} inventory is invalid")
-        records.append((path.as_posix(), size, mtime))
-    if len({record[0] for record in records}) != len(records):
-        raise TelegramAdapterError(f"{label} inventory is invalid")
-    return tuple(sorted(records))
+def _parse_file_inventory(output, roots, label):
+    try:
+        return parse_inventory(output, roots, format='tab_lines', allow_root=False)
+    except ValueError:
+        raise TelegramAdapterError(f"{label} inventory is invalid") from None
 
 
 def _await_inventory_change(
@@ -149,19 +115,21 @@ def _await_inventory_change(
     probes: int,
     interval: float,
     label: str,
+    *, stable_for: float,
 ) -> tuple[tuple[str, int, int], ...]:
     if not isinstance(baseline, tuple):
         raise TelegramAdapterError(f"{label} baseline is invalid")
-    before = {path: (size, mtime) for path, size, mtime in baseline}
-    current = baseline
-    for probe in range(probes):
-        if probe:
-            time.sleep(interval)
-        current = scan()
-        if any(
-            before.get(record[0]) != record[1:] for record in current
-        ):
-            return current
+    changed = ()
+    def change_key(current):
+        nonlocal changed
+        changed = changed_inventory(baseline, current)
+        return changed or None
+    selected = first_stable(poll_samples(scan, probes=probes, interval=interval),
+                            key=change_key, stable_for=stable_for)
+    if selected is not None:
+        return selected
+    if changed:
+        raise TelegramAdapterError(f"{label} inventory did not stabilize")
     raise TelegramAdapterError(f"{label} inventory did not change")
 
 
@@ -172,6 +140,7 @@ class TelegramDeviceAdapter:
         self.observations: dict[str, dict[str, bytes]] = {}
         self.observation_actions: dict[str, ActionRef] = {}
         self.last_action: ActionRef | None = None
+        self._observation_seed: str | None = None
         parameters = context.app_profile.parameters
         try:
             self.stagnation_rounds = int(parameters["stagnation_rounds"])
@@ -190,9 +159,7 @@ class TelegramDeviceAdapter:
         self._external_roots = tuple(
             sorted(PurePosixPath(path) for path in all_roots)
         )
-        self._inventory_interval = context.app_profile.timings.get(
-            "inventory_probe_interval", 0.25
-        )
+        self._inventory_interval = context.app_profile.timings["inventory_probe_interval"]
 
     def matching_elements(
         self,
@@ -204,7 +171,7 @@ class TelegramDeviceAdapter:
             selector = entry["selector"]
             constraints = entry.get("constraints", {})
             kind = selector["kind"]
-            attribute = SELECTOR_ATTRIBUTES[kind]
+            attribute = next(iter(selector_conditions({kind: selector["value"]}, backend="xml", allowed=SELECTOR_KINDS, transform=lambda value: value)))
             value = selector["value"]
         except (KeyError, TypeError):
             raise TelegramAdapterError(f"unknown Telegram element: {element_id}") from None
@@ -216,26 +183,17 @@ class TelegramDeviceAdapter:
         ):
             raise TelegramAdapterError("Telegram selector is invalid")
         expected = {attribute: value}
-        for key, constraint in constraints.items():
-            try:
-                expected[CONSTRAINT_ATTRIBUTES[key]] = _xml_value(constraint)
-            except KeyError:
-                raise TelegramAdapterError("Telegram selector constraint is invalid") from None
-        return tuple(
-            node
-            for node in root.iter()
-            if node.get("package") == PACKAGE
-            and all(node.get(key) == expected_value for key, expected_value in expected.items())
-        )
-
-    def element_selector(self, element_id: str) -> dict[str, object]:
         try:
-            entry = self.context.app_profile.selectors[element_id]
-            selector = dict(entry["selector"])
-            selector["constraints"] = dict(entry.get("constraints", {}))
+            expected.update(selector_conditions(constraints, backend="xml", allowed=CONSTRAINT_KINDS, transform=_xml_value))
+        except KeyError:
+            raise TelegramAdapterError("Telegram selector constraint is invalid") from None
+        return matching_nodes(root, PACKAGE, expected)
+
+    def element_selector(self, element_id):
+        try:
+            return selector_entry(self.context.app_profile, element_id)
         except (KeyError, TypeError):
             raise TelegramAdapterError(f"unknown Telegram element: {element_id}") from None
-        return selector
 
     def click(
         self,
@@ -243,6 +201,7 @@ class TelegramDeviceAdapter:
         selector: Mapping[str, object],
         before_observation_id: str,
     ) -> None:
+        self._observation_seed = None
         if selector.get("kind") == "xpath":
             try:
                 validate_selector(selector)
@@ -282,6 +241,7 @@ class TelegramDeviceAdapter:
         self._remember(action_id, action)
 
     def back(self, action_id: str, before_observation_id: str) -> None:
+        self._observation_seed = None
         action = self.context.ui.back(
             action_id,
             context={"before_observation_id": before_observation_id},
@@ -297,6 +257,7 @@ class TelegramDeviceAdapter:
         *,
         anchor: str = "lower_third",
     ) -> None:
+        self._observation_seed = None
         action = self.context.ui.click_bounds(
             action_id,
             bounds,
@@ -312,17 +273,30 @@ class TelegramDeviceAdapter:
         before_observation_id: str,
         direction: str = "forward",
     ) -> bool:
+        self._observation_seed = None
         try:
             ui_direction = {"forward": "up", "backward": "down"}[direction]
         except KeyError:
             raise TelegramAdapterError("scroll direction is invalid") from None
-        before = self._stable_ui_structure()
+        hierarchy = self.context.device.hierarchy()
+        before = self._stable_ui_structure(hierarchy)
+        from .collector import _default_list, _message_page
+        root = ET.fromstring(hierarchy)
+        page = _default_list(self, root) or _message_page(self, root)
+        boundary = getattr(self, "_scroll_boundary", None)
+        key = (direction, before[0])
+        seen = (boundary[2] if boundary is not None and boundary[:2] == (self.last_action, key)
+                else {before[1]})
         try:
-            self.context.device.swipe(ui_direction)
+            if page is None:
+                self.context.device.swipe(ui_direction)
+            else:
+                self.context.device.swipe_bounds(page['viewport'], ui_direction, distance_ratio=0.2)
             self._settle_transition()
-            moved = (
-                self._stable_ui_structure(self._settled_hierarchy()) != before
-            )
+            hierarchy = self._settled_hierarchy()
+            after = self._stable_ui_structure(hierarchy)
+            content_changed = after[0] != before[0]
+            moved = content_changed or after[1] not in seen
         except Exception as error:
             self.context.journal.record_action(
                 action_id,
@@ -338,6 +312,11 @@ class TelegramDeviceAdapter:
             details={"direction": ui_direction, "moved": moved},
         )
         self._remember(action_id, action)
+        # Only consecutive scrolls share clipping states. An intervening action
+        # or new content resets them; edge jitter cannot keep resetting stagnation.
+        self._observation_seed = hierarchy
+        self._scroll_boundary = (action, (direction, after[0]),
+                                 {after[1]} if content_changed else seen | {after[1]})
         return moved
 
     def observe(self, observation_id: str) -> dict[str, str]:
@@ -348,18 +327,12 @@ class TelegramDeviceAdapter:
             status="success",
             context={"observation_id": observation_id},
         )
-        tree = self._settled_hierarchy().encode("utf-8")
+        seed, self._observation_seed = self._observation_seed, None
+        # scroll already checked two stable samples; consume only its immediate result.
+        tree = (seed if seed is not None else self._settled_hierarchy()).encode("utf-8")
         screen = self.context.device.screenshot()
-        self.context.journal.append(
-            "observation_recorded",
-            status="success",
-            context={"observation_id": observation_id},
-            details={"action_event_id": action.event_id},
-        )
-        self.observations[observation_id] = {
-            "screen_image": screen,
-            "ui_tree": tree,
-        }
+        self.observations[observation_id] = record_snapshot(
+            self.context.journal, observation_id, action, screen, tree)
         self.observation_actions[observation_id] = action
         return {"observation_id": observation_id}
 
@@ -470,7 +443,7 @@ class TelegramDeviceAdapter:
         try:
             kind = selector["kind"]
             resolved = {
-                UIAUTOMATOR_KEYS[kind]: selector["value"],
+                **selector_conditions({kind: selector["value"]}, backend="uiautomator", allowed=SELECTOR_KINDS),
                 "packageName": selector["owner_package"],
             }
         except (KeyError, TypeError):
@@ -484,10 +457,7 @@ class TelegramDeviceAdapter:
             raise TelegramAdapterError("Telegram selector constraints are invalid")
         try:
             resolved.update(
-                {
-                    CONSTRAINT_UIAUTOMATOR_KEYS[key]: value
-                    for key, value in constraints.items()
-                }
+                selector_conditions(constraints, backend="uiautomator", allowed=CONSTRAINT_KINDS)
             )
         except KeyError:
             raise TelegramAdapterError("Telegram selector constraint is invalid") from None
@@ -512,12 +482,23 @@ class TelegramDeviceAdapter:
             and node.get("scrollable") == "true"
         ]
         if len(scrollables) == 1:
-            return tuple(
+            from .collector import _default_list, _message_page, _rect, _message_comparison_text
+
+            page = _default_list(self, root) or _message_page(self, root)
+            viewport = page["viewport"] if page is not None else _rect(scrollables[0])
+
+            def clipping(row):
+                rect = _rect(row)
+                if rect is None or viewport is None:
+                    return None
+                return (rect[0] < viewport[0], rect[1] < viewport[1],
+                        rect[2] > viewport[2], rect[3] > viewport[3])
+
+            content = tuple(
                 (
                     row.get("class", ""),
-                    row.get("bounds", ""),
                     tuple(
-                        value.strip().casefold()
+                        _message_comparison_text(value, self.context.app_profile).strip().casefold()
                         for node in row.iter()
                         for value in (
                             node.get("text", ""),
@@ -528,39 +509,28 @@ class TelegramDeviceAdapter:
                 )
                 for row in list(scrollables[0])
             )
+            return content, tuple(clipping(row) for row in scrollables[0])
 
-        def structure(node: ET.Element) -> tuple[Any, ...]:
-            attributes = tuple(
-                sorted(
-                    (key, value)
-                    for key, value in node.attrib.items()
-                    if key not in {"content-desc", "text"}
-                )
-            )
-            return node.tag, attributes, tuple(structure(child) for child in node)
-
-        return structure(root)
+        # Recycled rows can expose new labels without changing their structure.
+        return hierarchy_signature(root), ()
 
     def _settled_hierarchy(self) -> str:
-        previous = None
-        current = None
-        stable_polls = 0
-
-        def settled() -> bool:
-            nonlocal current, previous, stable_polls
-            current = self.context.device.hierarchy()
+        def key(hierarchy):
             try:
-                ET.fromstring(current)
+                return hierarchy_signature(hierarchy)
             except (ET.ParseError, TypeError):
-                raise TelegramAdapterError(
-                    "Telegram hierarchy is invalid"
-                ) from None
-            stable_polls = stable_polls + 1 if current == previous else 1
-            previous = current
-            return stable_polls >= 2
+                raise TelegramAdapterError("Telegram hierarchy is invalid") from None
+        current = None
+        settled, state = stability_probe(lambda: current, key=key)
 
-        if not self.context.ui.wait_until(settled):
+        def observe():
+            nonlocal current
+            current = self.context.device.hierarchy()
+            return settled()
+
+        if not self.context.ui.wait_until(observe):
             raise TelegramAdapterError("Telegram hierarchy did not settle")
+        current = state['value']
         assert isinstance(current, str)
         return current
 
@@ -570,6 +540,7 @@ class TelegramDeviceAdapter:
         label: str,
     ) -> tuple[tuple[str, int, int], ...]:
         output = self.context.device.shell(_external_snapshot_command(roots))
+        self._last_inventory_output = output
         if not isinstance(output, str):
             raise TelegramAdapterError(f"{label} inventory failed")
         return _parse_file_inventory(output, roots, label)
@@ -582,26 +553,51 @@ class TelegramDeviceAdapter:
         baseline: object,
         label: str,
     ) -> tuple[tuple[str, int, int], ...]:
+        self._observation_seed = None
+        diagnostic = {"label": label, "baseline": baseline if isinstance(baseline, tuple) else None,
+                      "last_observed": None, "changed_candidates": None, "probe_count": 0,
+                      "last_scan_succeeded": False, "failed_output_sha256": None, "failed_output_size": None}
+
+        def observed_scan():
+            diagnostic["probe_count"] += 1
+            diagnostic["last_scan_succeeded"] = False
+            self._last_inventory_output = None
+            current = scan()
+            diagnostic.update(last_observed=current, last_scan_succeeded=True,
+                              changed_candidates=changed_inventory(baseline, current) if baseline is not None else None)
+            return current
+
         try:
             result = (
-                scan()
+                observed_scan()
                 if baseline is None
                 else _await_inventory_change(
-                    scan,
+                    observed_scan,
                     baseline,
                     self.inventory_probes,
                     self._inventory_interval,
                     label,
+                    stable_for=self.context.app_profile.timings['inventory_stable_for'],
                 )
             )
         except Exception as error:
+            diagnostic.update(error=type(error).__name__, error_message=str(error))
+            if not diagnostic["last_scan_succeeded"]:
+                output = getattr(self, "_last_inventory_output", None)
+                # Rejected output has not passed scope/path validation. Retain
+                # its fingerprint, not potentially out-of-scope filenames.
+                if isinstance(output, str):
+                    raw = output.encode("utf-8")
+                    diagnostic.update(failed_output_sha256=hashlib.sha256(raw).hexdigest(),
+                                      failed_output_size=len(raw))
             self.context.journal.record_action(
                 action_id,
                 status="failed",
                 context={"before_observation_id": before_observation_id},
-                details={"error": type(error).__name__},
+                details={"error": type(error).__name__, "error_message": str(error),
+                         "inventory_diagnostic": diagnostic},
             )
-            raise
+            raise TelegramAdapterError(str(error), diagnostics=diagnostic) from error
         action = self.context.journal.record_action(
             action_id,
             status="success",
@@ -629,10 +625,7 @@ class TelegramDeviceAdapter:
         ):
             raise TelegramAdapterError("external file path is outside requested roots")
         try:
-            with TemporaryDirectory() as directory:
-                local = Path(directory) / "artifact"
-                self.context.device.pull(path.as_posix(), local)
-                value = local.read_bytes()
+            value = pull_bytes(self.context.device, path.as_posix(), filename='artifact')
         except Exception as error:
             self.context.journal.record_action(
                 action_id,
@@ -651,12 +644,12 @@ class TelegramDeviceAdapter:
         return value
 
     def _remember(self, legacy_id: str, action: ActionRef) -> None:
+        self._observation_seed = None
         self.actions[legacy_id] = action
         self.last_action = action
 
-    @staticmethod
-    def _settle_transition() -> None:
-        time.sleep(_TRANSITION_SETTLE_SECONDS)
+    def _settle_transition(self) -> None:
+        time.sleep(self.context.app_profile.timings["transition_settle"])
 
 
 class TelegramOutputs:
@@ -1124,6 +1117,10 @@ class TelegramOutputs:
         if self.logical_chatroom_id is None:
             if retained_basename is not None:
                 raise TelegramAdapterError("retained basename is invalid")
+            if (fields["artifact_class"] == "chatroom_list"
+                and fields["output_kind"] == "audit_record" and suffix == ".json"
+                and re.fullmatch(r"list-(?:return|overlap)-\d{6}", artifact_id)):
+                return f"{artifact_id}.json"
             names = {
                 "account": "account.json",
                 "account-screen": "account.png",

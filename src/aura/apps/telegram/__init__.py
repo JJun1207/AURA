@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ...models import AcquisitionStatus, Outcome, OutcomeStatus
+from ...models import AcquisitionStatus, Outcome, OutcomeStatus, ProcedureStatus
 from ...runtime import RunContext
 from . import collector
 from .adapter import TelegramDeviceAdapter, TelegramOutputs
@@ -46,10 +46,12 @@ def collect(context: RunContext) -> Outcome:
     if status is OutcomeStatus.COMPLETE:
         context.complete_open_attempts(AcquisitionStatus.ACQUIRED)
     elif status is OutcomeStatus.PARTIAL:
-        context.interrupt_open_attempts(
-            str(reason or "telegram_collection_partial"),
-            AcquisitionStatus.PARTIAL,
-        )
+        for attempt in context.attempts:
+            if attempt.procedure_status is None:
+                context.finish_attempt(
+                    attempt.attempt_id, ProcedureStatus.COMPLETED, AcquisitionStatus.PARTIAL,
+                    reason=str(reason or "telegram_collection_partial"),
+                )
     else:
         context.interrupt_open_attempts(
             str(reason or "telegram_collection_failed")

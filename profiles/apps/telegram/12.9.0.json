@@ -20,6 +20,9 @@
       "expected_artifacts": [
         "structured_data"
       ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
       "rules": {
         "identification": {
           "id": "telegram.parse_account_profile",
@@ -59,6 +62,10 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "Retain account information already exposed by the signed-in local UI.",
+        "controlled_online": "Retain account information with server refresh available; record only the displayed values."
       }
     },
     {
@@ -74,6 +81,9 @@
       ],
       "expected_artifacts": [
         "structured_data"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
       ],
       "rules": {
         "identification": {
@@ -116,6 +126,10 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "Enumerate locally available chat information and message histories so cached conversations are retained before network access.",
+        "controlled_online": "Traverse the same chat and message UI with remote loading available; completion remains bounded by the observed UI and recorded procedure."
       }
     },
     {
@@ -133,6 +147,9 @@
       "expected_artifacts": [
         "structured_data",
         "downloaded_file"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
       ],
       "rules": {
         "identification": {
@@ -198,25 +215,63 @@
             }
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "Cache-preserved device checks recovered attachment originals offline. Attempt supported photo, video and general-file saves and record unavailable originals.",
+        "controlled_online": "Permit retrieval of server-hosted media/files through the same UI save procedures and verify each resulting original."
       }
     }
   ],
   "selectors": {
     "telegram.list.top.title": {
-      "selector": {"kind": "text", "owner_package": "org.telegram.messenger", "value": "Telegram"},
-      "constraints": {"class_name": "android.widget.TextView"}
+      "selector": {
+        "kind": "text",
+        "owner_package": "org.telegram.messenger",
+        "value": "Telegram"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "telegram.list.top.logo": {
+      "selector": {
+        "kind": "content_description",
+        "owner_package": "org.telegram.messenger",
+        "value": "Telegram"
+      },
+      "constraints": {
+        "class_name": "android.widget.ImageView"
+      }
     },
     "telegram.list.top.waiting": {
-      "selector": {"kind": "text", "owner_package": "org.telegram.messenger", "value": "Waiting for network"},
-      "constraints": {"class_name": "android.widget.TextView"}
+      "selector": {
+        "kind": "text",
+        "owner_package": "org.telegram.messenger",
+        "value": "Waiting for network"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
     },
     "telegram.list.top.waiting-ellipsis": {
-      "selector": {"kind": "text", "owner_package": "org.telegram.messenger", "value": "Waiting for network..."},
-      "constraints": {"class_name": "android.widget.TextView"}
+      "selector": {
+        "kind": "text",
+        "owner_package": "org.telegram.messenger",
+        "value": "Waiting for network..."
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
     },
     "telegram.list.top.connecting": {
-      "selector": {"kind": "text", "owner_package": "org.telegram.messenger", "value": "Connecting..."},
-      "constraints": {"class_name": "android.widget.TextView"}
+      "selector": {
+        "kind": "text",
+        "owner_package": "org.telegram.messenger",
+        "value": "Connecting..."
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
     },
     "telegram.list": {
       "selector": {
@@ -452,13 +507,37 @@
         "value": "Save to Gallery"
       },
       "constraints": {}
+    },
+    "telegram.info.member-row": {
+      "selector": {
+        "kind": "class_name",
+        "owner_package": "org.telegram.messenger",
+        "value": "android.widget.FrameLayout"
+      },
+      "constraints": {
+        "focusable": true
+      }
+    },
+    "telegram.list.web-tabs": {
+      "selector": {
+        "kind": "content_description",
+        "owner_package": "org.telegram.messenger",
+        "selector_id": "telegram.list.web-tabs.content-description",
+        "value": "Web tabs "
+      },
+      "constraints": {
+        "class_name": "android.widget.FrameLayout"
+      }
     }
   },
   "timings": {
     "default_timeout": 5.0,
     "poll_interval": 0.2,
     "application_start_settle": 1.0,
-    "inventory_probe_interval": 0.25
+    "inventory_probe_interval": 0.25,
+    "transition_settle": 0.5,
+    "inventory_stable_for": 1.0,
+    "attachment_menu_timeout": 1.5
   },
   "parameters": {
     "stagnation_rounds": 2,
@@ -475,6 +554,15 @@
         "/sdcard/Movies/Telegram",
         "/sdcard/Pictures/Telegram"
       ]
-    }
+    },
+    "display_patterns": {
+      "channel_status": "\\A(?P<body>.+)\\nSent at (?P<time>(?:(?:[1-9]|1[0-2]):[0-5][0-9] (?:AM|PM)|(?:[01]?[0-9]|2[0-3]):[0-5][0-9])), Not seen\\nViewed (?P<views>\\d[\\d,]*) times?\\n\\Z",
+      "message_status": "\\A(.+)\\n(Received|Sent) at ((?:(?:[1-9]|1[0-2]):[0-5][0-9] (?:AM|PM)|(?:[01]?[0-9]|2[0-3]):[0-5][0-9]))(?:\\n|, (?P<status>Seen|Not seen)\\n?)\\Z",
+      "message_reactions": "\\A(?P<message>.+\\n(?:Received|Sent) at (?:(?:[1-9]|1[0-2]):[0-5][0-9] (?:AM|PM)|(?:[01]?[0-9]|2[0-3]):[0-5][0-9])(?:, (?:Seen|Not seen))?)(?:Reactions: (?:(?!\\n(?:Received|Sent) at ).)*?\\n|\\n(?:[^\\n]* reacted with [^\\n]+\\n)+)(?P<views>Viewed \\d[\\d,]* times?\\n)?\\Z"
+    },
+    "display_text": {
+      "deleted_account": "Deleted Account"
+    },
+    "attachment_menu_attempts": 3
   }
 }

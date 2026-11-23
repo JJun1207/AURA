@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+import sys
+from operator import itemgetter
+from ...collection import visit_candidates, iter_windows, visit_item, ordered_candidate, overlap_candidates
+from ...parsing import node_values
+from ...ui import hierarchy_signature
 from collections.abc import Mapping
 
 from ...models import (
@@ -18,6 +23,7 @@ from .collector import (
     _settled_root,
     acquisition_item_attempt,
     collect_export,
+    retention_action,
 )
 from .materialize import _write_json, collect_materialize
 
@@ -39,7 +45,7 @@ def _active_chat_rows(root, profile):
             raise WhatsAppCollectorError(
                 "whatsapp_chat_row_invalid"
             )
-        display_name = names[0].get("text", "").strip()
+        display_name = next(iter(node_values(names)), "")
         if not display_name:
             raise WhatsAppCollectorError(
                 "whatsapp_chat_row_invalid"
@@ -63,27 +69,12 @@ def parse_active_chat_rows(hierarchy: str, profile):
     return _active_chat_rows(root, profile)
 
 
-def _page_signature(rows):
-    return tuple(
-        (row["display_name"], row["bounds"]) for row in rows
-    )
-
-
 def _name_signature(rows):
     return tuple(row["display_name"] for row in rows)
 
 
 def _name_overlap(previous, current):
-    previous_names = _name_signature(previous)
-    current_names = _name_signature(current)
-    for size in range(
-        min(len(previous_names), len(current_names)),
-        0,
-        -1,
-    ):
-        if previous_names[-size:] == current_names[:size]:
-            return size
-    return 0
+    return max(overlap_candidates(_name_signature(previous), _name_signature(current)), default=0)
 
 
 def _settled_chat_rows(context):
@@ -94,6 +85,40 @@ def _settled_chat_rows(context):
         ),
         "whatsapp_chat_list_unavailable",
     )
+
+
+def _rewind_chat_list(context, linked, attempt_id):
+    root, hierarchy, rows = _settled_chat_rows(context)
+    signature = hierarchy_signature(_matching(root, context.app_profile, "whatsapp.chat-list")[0])
+    seen = {signature}
+    reason = "whatsapp_chat_list_top_limit"
+    # ponytail: cap initial normalization at 100 scrolls; add a profile limit for larger lists.
+    for step in range(100):
+        before_signature = signature
+        swipe = context.ui.swipe("whatsapp_toward_first_chat", "down", context=linked)
+        root, hierarchy, rows = _settled_chat_rows(context)
+        current = hierarchy_signature(_matching(root, context.app_profile, "whatsapp.chat-list")[0])
+        if current == signature:
+            reason = None
+            break
+        if current in seen:
+            reason = "whatsapp_chat_list_top_cycle"
+            break
+        seen.add(current)
+        signature = current
+    action = context.journal.record_action(
+        "verify_whatsapp_chat_list_top", status="failed" if reason else "success",
+        attempt_id=attempt_id, context={**linked, "source_action_id": swipe.action_id},
+        details={"reason": reason, "scroll_count": step + 1,
+                 "before_signature": before_signature, "after_signature": current})
+    retained = retention_action(context, attempt_id, action, linked)
+    screen, _ = context.retain_observation(
+        "whatsapp/observations/active-chat-list-top", context.device.screenshot(), hierarchy.encode("utf-8"),
+        attempt_id=attempt_id, action=retained, context=dict(linked))
+    if reason:
+        raise WhatsAppCollectorError(reason, action=action)
+    return rows, {"action_id": action.action_id, "observation_id": screen.observation_id,
+                  "scroll_count": step + 1}
 
 
 def _restore_chat_list(context, linked):
@@ -148,19 +173,46 @@ def _collect_active_chats(
     incomplete_reason: str,
 ) -> Outcome:
     linked = {"target_ref": target["ref"]}
-    context.item_attempt("whatsapp:list-summary", "whatsapp.conversations", "conversation_collection", context=linked)
-    target_ids = ("whatsapp.chat_export",) if context.base_context.get("route") == "export" else ("whatsapp.conversations", "whatsapp.attachments")
+    summary_attempt_id = acquisition_item_attempt(context, linked, document={"record_kind": record_kind})
+    target_ids = ("whatsapp.chat_export", "whatsapp.export_summary") if context.base_context.get("route") == "export" else ("whatsapp.conversations", "whatsapp.attachments")
     for target_id in target_ids:
         context.begin_identification(target_id)
-    _, _, rows = _settled_chat_rows(context)
+    rows, top_boundary = _rewind_chat_list(context, linked, summary_attempt_id)
     previous_rows = []
     processed = []
     active_list_end_reached = False
 
-    while True:
+    def read():
+        return rows
+    def advance():
+        nonlocal rows, previous_rows, active_list_end_reached
+        previous_rows = rows_after_return
+        context.ui.swipe("whatsapp_toward_later_chats", "up", context=linked)
+        _, _, rows = _settled_chat_rows(context)
+        active_list_end_reached = _name_signature(rows) == _name_signature(previous_rows)
+        return not active_list_end_reached
+    # Only the adjacent boundary establishes completion; a revisited older window
+    # remains an app-level identity question, not a silently completed traversal.
+    for rows in iter_windows(read, advance, lambda _: None):
         overlap = _name_overlap(previous_rows, rows)
         rows_after_return = rows
-        for row in rows[overlap:]:
+        def reacquire(candidate):
+            index, expected = candidate
+            # Keep a fresh pre-click check: a settled return may still be an
+            # intermediate animation. Only unchanged rows can reuse that settle.
+            try:
+                current = _active_chat_rows(ET.fromstring(context.device.hierarchy()), context.app_profile)
+            except (ET.ParseError, TypeError, WhatsAppCollectorError):
+                current = None
+            if current is None or _name_signature(current) != _name_signature(rows_after_return):
+                _, _, current = _settled_chat_rows(context)
+            # A visited leading prefix may disappear, but all remaining occurrences must match.
+            try:
+                return ordered_candidate(rows, current, index, key=itemgetter("display_name"),
+                                         allow_removed_prefix=True)
+            except ValueError:
+                raise WhatsAppCollectorError("whatsapp_chat_list_changed_after_return") from None
+        for row in visit_candidates(enumerate(rows[overlap:], overlap), reacquire):
             ordinal = len(processed) + 1
             chat_target = {
                 "kind": "chat",
@@ -175,86 +227,76 @@ def _collect_active_chats(
                 "display_name": row["display_name"],
                 "chat_ordinal": ordinal,
             }
-            context.ui.click_bounds(
-                "open_whatsapp_active_chat",
-                row["bounds"],
-                context=chat_context,
-            )
-            try:
-                outcome = collect_open(
-                    context,
-                    chat_target,
-                    chat_context,
-                )
-            except Exception as error:
-                reason = getattr(
-                    error,
-                    "reason_code",
-                    "whatsapp_chat_collection_exception",
-                )
-                item_context = {
-                    **chat_context,
-                    "target_ref": chat_target["ref"],
-                }
-                attempt_id = acquisition_item_attempt(
-                    context, item_context
-                )
-                action = context.journal.record_action(
-                    "collect_whatsapp_active_chat",
-                    status="failed",
-                    attempt_id=attempt_id,
-                    context=item_context,
-                    details={
-                        "reason": reason,
-                        "error_type": type(error).__name__,
-                    },
-                )
-                outcome = Outcome(
-                    OutcomeStatus.PARTIAL,
-                    reason,
-                    action=action,
+            def enter():
+                context.ui.click_bounds(
+                    "open_whatsapp_active_chat",
+                    row["bounds"],
                     context=chat_context,
                 )
-                attempt = next(
-                    item
-                    for item in context.attempts
-                    if item.attempt_id == attempt_id
-                )
-                if attempt.procedure_status is None:
-                    context.finish_attempt(
-                        attempt_id,
-                        ProcedureStatus.INTERRUPTED,
-                        AcquisitionStatus.NOT_ACQUIRED,
-                        reason=reason,
-                        action=action,
+            def read():
+                try:
+                    outcome = collect_open(
+                        context,
+                        chat_target,
+                        chat_context,
                     )
-            processed.append({
-                "chat_ref": chat_target["ref"],
-                "display_name": row["display_name"],
-                "status": outcome.status.value,
-                "reason": outcome.reason,
-            })
-            _, _, rows_after_return = _restore_chat_list(
-                context, chat_context
-            )
-
-        previous_rows = rows_after_return
-        before_scroll_signature = _page_signature(
-            rows_after_return
-        )
-        context.ui.swipe(
-            "whatsapp_toward_later_chats",
-            "up",
-            context=linked,
-        )
-        _, _, next_rows = _settled_chat_rows(context)
-        if (
-            _page_signature(next_rows)
-            == before_scroll_signature
-        ):
-            active_list_end_reached = True
-            break
-        rows = next_rows
+                except Exception as error:
+                    reason = getattr(
+                        error,
+                        "reason_code",
+                        "whatsapp_chat_collection_exception",
+                    )
+                    item_context = {
+                        **chat_context,
+                        "target_ref": chat_target["ref"],
+                    }
+                    source_action = getattr(error, "action", None)
+                    if source_action is not None:
+                        item_context["source_action_id"] = source_action.action_id
+                    attempt_id = acquisition_item_attempt(
+                        context, item_context
+                    )
+                    action = context.journal.record_action(
+                        "collect_whatsapp_active_chat",
+                        status="failed",
+                        attempt_id=attempt_id,
+                        context=item_context,
+                        details={
+                            "reason": reason,
+                            "error_type": type(error).__name__,
+                            "detail": str(error),
+                        },
+                    )
+                    print(f"AURA: Chat acquisition failed ({row['display_name']}): {error}. Returning to the chat list to continue.",
+                          file=sys.stderr, flush=True)
+                    outcome = Outcome(
+                        OutcomeStatus.PARTIAL,
+                        reason,
+                        action=action,
+                        context=chat_context,
+                    )
+                    attempt = next(
+                        item
+                        for item in context.attempts
+                        if item.attempt_id == attempt_id
+                    )
+                    if attempt.procedure_status is None:
+                        context.finish_attempt(
+                            attempt_id,
+                            ProcedureStatus.INTERRUPTED,
+                            AcquisitionStatus.NOT_ACQUIRED,
+                            reason=reason,
+                            action=action,
+                        )
+                processed.append({
+                    "chat_ref": chat_target["ref"],
+                    "display_name": row["display_name"],
+                    "status": outcome.status.value,
+                    "reason": outcome.reason,
+                })
+                return outcome
+            _, (_, _, rows_after_return) = visit_item(
+                enter, read, lambda: _restore_chat_list(context, chat_context))
 
     completed_count = sum(
         item["status"] == OutcomeStatus.COMPLETE.value
@@ -281,6 +323,8 @@ def _collect_active_chats(
             "record_kind": record_kind,
             "target_ref": target["ref"],
             "identity_basis": "active_list_ordinal",
+            "active_list_start_reached": True,
+            "top_boundary": top_boundary,
             "active_list_end_reached": (
                 active_list_end_reached
             ),
@@ -307,6 +351,7 @@ def _collect_active_chats(
         action=output_action,
         context=linked,
         details={
+            "active_list_start_reached": True,
             "processed_count": len(processed),
             "completed_count": completed_count,
             "active_list_end_reached": (

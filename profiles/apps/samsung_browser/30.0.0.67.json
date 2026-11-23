@@ -14,11 +14,15 @@
       ],
       "method": "materialize",
       "acquisition_environments": [
-        "device_only"
+        "device_only",
+        "controlled_online"
       ],
       "expected_artifacts": [
         "structured_data",
         "ui_observation"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
       ],
       "rules": {
         "identification": {
@@ -28,13 +32,20 @@
               "history_entry"
             ],
             "ui_criteria": {
-              "row_resource_id": "history_relative",
-              "required_child_resource_id": "history_title",
               "identity_fields": [
+                "date_group",
                 "title",
                 "displayed_address",
                 "displayed_time"
-              ]
+              ],
+              "window_merge": "longest_adjacent_ordered_record_overlap",
+              "group_indicator_resource_id": "group_header_indicator",
+              "collapsed_description": "Expand",
+              "expanded_description": "Collapse",
+              "parser_spec": {
+                "parameter": "list_parsing.history",
+                "sha256": "e6b432e128e9ff544ccf498f2b7b277e7ca7fc1f9c8dc2b824b81f5e3c133540"
+              }
             }
           }
         },
@@ -42,7 +53,7 @@
           "id": "samsung_browser.history.verified_ui_boundary",
           "parameters": {
             "completion_conditions": [
-              "repeated_hierarchy"
+              "repeated_hierarchy_with_expanded_date_groups"
             ]
           }
         },
@@ -68,6 +79,10 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "Enumerate locally displayed visits and expand date groups without opening individual history entries; retain separate duplicate visits.",
+        "controlled_online": "Enumerate the same visit list with connectivity available; startup or app refresh can add history entries."
       }
     },
     {
@@ -78,11 +93,15 @@
       ],
       "method": "materialize",
       "acquisition_environments": [
-        "device_only"
+        "device_only",
+        "controlled_online"
       ],
       "expected_artifacts": [
         "structured_data",
         "ui_observation"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
       ],
       "rules": {
         "identification": {
@@ -92,8 +111,10 @@
               "download_entry"
             ],
             "ui_criteria": {
-              "row_resource_id": "download_item_parent",
-              "required_child_resource_id": "download_item_title"
+              "parser_spec": {
+                "parameter": "list_parsing.downloads",
+                "sha256": "3801aa115877eebb652158ad48ea6192dd0ed1b307bd2a7ba61b4e8b97632b59"
+              }
             }
           }
         },
@@ -127,6 +148,10 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "Retain the existing download-entry list without starting new downloads; this target does not acquire the original files.",
+        "controlled_online": "Retain the download-entry list in the connected session, with the same list-only scope."
       }
     },
     {
@@ -137,11 +162,15 @@
       ],
       "method": "materialize",
       "acquisition_environments": [
-        "device_only"
+        "device_only",
+        "controlled_online"
       ],
       "expected_artifacts": [
         "structured_data",
         "ui_observation"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
       ],
       "rules": {
         "identification": {
@@ -151,8 +180,10 @@
               "saved_page_entry"
             ],
             "ui_criteria": {
-              "row_resource_id": "saved_page_list_view_layout",
-              "required_child_resource_id": "saved_page_list_view_title_text_view"
+              "parser_spec": {
+                "parameter": "list_parsing.saved_pages",
+                "sha256": "f1abb2f67bf0b7787d2a25cd3513b978dcc4b7bbf94666d0feb47ce6c1f3d69a"
+              }
             }
           }
         },
@@ -186,6 +217,10 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "Retain locally displayed saved-page entries; the implemented target is the list rather than saved-page file extraction.",
+        "controlled_online": "Retain the same saved-page list with connectivity available; no additional original-file procedure is implied."
       }
     },
     {
@@ -196,11 +231,15 @@
       ],
       "method": "materialize",
       "acquisition_environments": [
-        "device_only"
+        "device_only",
+        "controlled_online"
       ],
       "expected_artifacts": [
         "structured_data",
         "ui_observation"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
       ],
       "rules": {
         "identification": {
@@ -210,8 +249,10 @@
               "bookmark_entry"
             ],
             "ui_criteria": {
-              "row_resource_id": "displayed_view",
-              "required_child_resource_id": "bookmark_folder_title"
+              "parser_spec": {
+                "parameter": "list_parsing.bookmarks",
+                "sha256": "ab09cca4b3579767e1b2737e236930fc5d0f1db2777a76ac47b2f06802d73d1c"
+              }
             }
           }
         },
@@ -245,6 +286,10 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "Traverse the bookmark folders and entries already available in the local UI.",
+        "controlled_online": "Traverse the same bookmark UI with synchronization available; retain the entries actually exposed by the app."
       }
     }
   ],
@@ -353,7 +398,96 @@
     "default_timeout": 5.0,
     "poll_interval": 0.2,
     "transition_settle": 0.4,
-    "application_start_settle": 0.8
+    "application_start_settle": 0.8,
+    "history_group_expand_timeout": 5.0,
+    "scroll_settle": 0.4,
+    "history_group_expand_settle": 0.4
   },
-  "parameters": {}
+  "parameters": {
+    "ui_fields": {
+      "bookmark_folder_title": "bookmark_folder_title",
+      "displayed_view": "displayed_view",
+      "download_item_parent": "download_item_parent",
+      "download_item_title": "download_item_title",
+      "download_item_total_size": "download_item_total_size",
+      "download_item_url": "download_item_url",
+      "history_relative": "history_relative",
+      "history_time": "history_time",
+      "history_title": "history_title",
+      "history_url": "history_url",
+      "saved_page_list_view_description_text_view": "saved_page_list_view_description_text_view",
+      "saved_page_list_view_layout": "saved_page_list_view_layout",
+      "saved_page_list_view_title_text_view": "saved_page_list_view_title_text_view",
+      "saved_page_list_view_url_text_view": "saved_page_list_view_url_text_view",
+      "title": "title",
+      "group_header_indicator": "group_header_indicator"
+    },
+    "display_text": {
+      "history_expand": "Expand",
+      "history_collapse": "Collapse",
+      "history_header_collapsed": "Expand",
+      "history_header_expanded": "Collapse"
+    },
+    "list_parsing": {
+      "history": {
+        "row": {
+          "resource_id": "history_relative"
+        },
+        "fields": {
+          "title": "history_title",
+          "displayed_address": "history_url",
+          "displayed_time": "history_time"
+        },
+        "required": [
+          "title"
+        ],
+        "group": {
+          "selector": {
+            "resource_id": "title"
+          },
+          "source": {
+            "attribute": "text"
+          },
+          "field": "date_group"
+        }
+      },
+      "downloads": {
+        "row": {
+          "resource_id": "download_item_parent"
+        },
+        "fields": {
+          "title": "download_item_title",
+          "source": "download_item_url",
+          "displayed_size": "download_item_total_size"
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "saved_pages": {
+        "row": {
+          "resource_id": "saved_page_list_view_layout"
+        },
+        "fields": {
+          "title": "saved_page_list_view_title_text_view",
+          "displayed_address": "saved_page_list_view_url_text_view",
+          "description": "saved_page_list_view_description_text_view"
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "bookmarks": {
+        "row": {
+          "resource_id": "displayed_view"
+        },
+        "fields": {
+          "title": "bookmark_folder_title"
+        },
+        "required": [
+          "title"
+        ]
+      }
+    }
+  }
 }

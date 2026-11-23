@@ -18,11 +18,15 @@
       ],
       "method": "materialize",
       "acquisition_environments": [
-        "device_only"
+        "device_only",
+        "controlled_online"
       ],
       "expected_artifacts": [
         "structured_data",
         "ui_observation"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
       ],
       "rules": {
         "identification": {
@@ -32,11 +36,10 @@
               "account_entry"
             ],
             "ui_criteria": {
-              "row_resource_id": "account_management_account_row",
-              "fields": [
-                "android:id/title",
-                "android:id/summary"
-              ]
+              "parser_spec": {
+                "parameter": "list_parsing.account",
+                "sha256": "efe8b158fea18e28e7776ec8a35b04cebe6942555b8b1d60223214cb82d024b7"
+              }
             }
           }
         },
@@ -70,6 +73,10 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "Retain account information exposed by the signed-in local UI without requiring a server refresh.",
+        "controlled_online": "Retain the same account UI after connectivity is enabled; account refresh may change the displayed information."
       }
     },
     {
@@ -80,11 +87,15 @@
       ],
       "method": "materialize",
       "acquisition_environments": [
-        "device_only"
+        "device_only",
+        "controlled_online"
       ],
       "expected_artifacts": [
         "structured_data",
         "ui_observation"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
       ],
       "rules": {
         "identification": {
@@ -94,12 +105,11 @@
               "history_entry"
             ],
             "ui_criteria": {
-              "row_clickable": true,
-              "required_child_resource_ids": [
-                "title",
-                "description"
-              ],
-              "date_marker": "unlabelled_text"
+              "window_merge": "longest_adjacent_ordered_record_overlap",
+              "parser_spec": {
+                "parameter": "list_parsing.history",
+                "sha256": "4e641f38406ff046ab6f081710b434d66a6f61f4992083a729a3c4ff5b909fce"
+              }
             }
           }
         },
@@ -133,6 +143,10 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "Enumerate locally displayed browsing history after the history view finishes loading; no page visits are required to read the list.",
+        "controlled_online": "Enumerate the same history list with connectivity available, including entries the app exposes after refresh."
       }
     },
     {
@@ -143,11 +157,15 @@
       ],
       "method": "materialize",
       "acquisition_environments": [
-        "device_only"
+        "device_only",
+        "controlled_online"
       ],
       "expected_artifacts": [
         "structured_data",
         "ui_observation"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
       ],
       "rules": {
         "identification": {
@@ -157,16 +175,11 @@
               "download_entry"
             ],
             "ui_criteria": {
-              "row_clickable": true,
-              "title_sources": [
-                "title.text",
-                "thumbnail.content-desc"
-              ],
-              "optional_child_resource_ids": [
-                "caption"
-              ],
-              "date_resource_id": "date",
-              "window_merge": "ordered_overlap_with_missing_field_enrichment"
+              "window_merge": "longest_ordered_overlap_with_missing_field_enrichment",
+              "parser_spec": {
+                "parameter": "list_parsing.downloads",
+                "sha256": "48c274f7d6720dff1a05789878470650f7e715e4a7d642bd4162c3682ca59c23"
+              }
             }
           }
         },
@@ -200,6 +213,10 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "Read the existing download-entry list without requesting new downloads; entries do not establish possession of original files.",
+        "controlled_online": "Read the download-entry list in the connected session; this target still does not download the listed originals."
       }
     },
     {
@@ -210,11 +227,15 @@
       ],
       "method": "materialize",
       "acquisition_environments": [
-        "device_only"
+        "device_only",
+        "controlled_online"
       ],
       "expected_artifacts": [
         "structured_data",
         "ui_observation"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
       ],
       "rules": {
         "identification": {
@@ -225,11 +246,15 @@
             ],
             "ui_criteria": {
               "identity_fields": [
-                "kind",
-                "folder_path",
-                "title"
+                "folder_ref",
+                "entry_index"
               ],
-              "traverse_folders": true
+              "traverse_folders": true,
+              "window_merge": "longest_adjacent_ordered_record_overlap",
+              "parser_spec": {
+                "parameter": "list_parsing.bookmarks",
+                "sha256": "f425ce65a69d7eefa48160fdeab422548d7d0f766cb4d9d1029b255d47deb2e5"
+              }
             }
           }
         },
@@ -263,6 +288,10 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "Traverse locally available bookmark folders and entries; synchronization is not required to retain entries already exposed by the UI.",
+        "controlled_online": "Traverse bookmark folders and entries with synchronization available; retain only the records actually exposed."
       }
     },
     {
@@ -273,11 +302,15 @@
       ],
       "method": "materialize",
       "acquisition_environments": [
-        "device_only"
+        "device_only",
+        "controlled_online"
       ],
       "expected_artifacts": [
         "structured_data",
         "ui_observation"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
       ],
       "rules": {
         "identification": {
@@ -287,9 +320,10 @@
               "recent_tab_entry"
             ],
             "ui_criteria": {
-              "row_resource_id": "recent_tabs_list_item_layout",
-              "required_child_resource_id": "title_row",
-              "group_resource_id": "recent_tabs_group_view"
+              "parser_spec": {
+                "parameter": "list_parsing.recent_tabs",
+                "sha256": "baa349dc322a12c07175667c89029d2e3020142f85994dfe841ae05216ae3b87"
+              }
             }
           }
         },
@@ -323,6 +357,10 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "Read accessible recent-tab entries, including locally retained entries; remote-device entries may be unavailable.",
+        "controlled_online": "Read recent-tab entries with network access available for synchronized-device information; app navigation can change recent-tab state."
       }
     }
   ],
@@ -464,10 +502,173 @@
     }
   },
   "timings": {
-    "default_timeout": 5.0,
+    "default_timeout": 30.0,
     "poll_interval": 0.2,
     "transition_settle": 0.4,
-    "application_start_settle": 0.8
+    "application_start_settle": 0.8,
+    "history_load_timeout": 30.0,
+    "scroll_settle": 0.4
   },
-  "parameters": {}
+  "parameters": {
+    "ui_fields": {
+      "account_management_account_row": "account_management_account_row",
+      "action_bar": "action_bar",
+      "caption": "caption",
+      "child_count_text": "child_count_text",
+      "create_new_folder_menu_id": "create_new_folder_menu_id",
+      "date": "date",
+      "description": "description",
+      "device_label": "device_label",
+      "domain_row": "domain_row",
+      "empty_state_text_title": "empty_state_text_title",
+      "history_page_recycler_view": "history_page_recycler_view",
+      "loading_view": "loading_view",
+      "progress_spinner": "progress_spinner",
+      "recent_tabs_group_view": "recent_tabs_group_view",
+      "recent_tabs_list_item_layout": "recent_tabs_list_item_layout",
+      "selectable_list_recycler_view": "selectable_list_recycler_view",
+      "summary": "summary",
+      "thumbnail": "thumbnail",
+      "title": "title",
+      "title_row": "title_row",
+      "url": "url"
+    },
+    "list_parsing": {
+      "history": {
+        "container": {
+          "resource_id": "history_page_recycler_view"
+        },
+        "row": {
+          "clickable": "true"
+        },
+        "fields": {
+          "title": "title",
+          "displayed_address": "description"
+        },
+        "required": [
+          "title",
+          "displayed_address"
+        ],
+        "group": {
+          "selector": {
+            "class": "android.widget.TextView",
+            "resource-id": ""
+          },
+          "source": {
+            "attribute": "text"
+          },
+          "field": "date_group"
+        }
+      },
+      "downloads": {
+        "row": {
+          "clickable": "true"
+        },
+        "fields": {
+          "title": [
+            "title",
+            {
+              "resource_id": "thumbnail",
+              "attribute": "content-desc"
+            }
+          ],
+          "caption": "caption"
+        },
+        "required": [
+          "title"
+        ],
+        "group": {
+          "selector": {
+            "resource_id": "date"
+          },
+          "source": {
+            "attribute": "text"
+          },
+          "field": "date_group"
+        }
+      },
+      "bookmarks": {
+        "row": {
+          "clickable": "true"
+        },
+        "fields": {
+          "title": "title"
+        },
+        "required": [
+          "title"
+        ],
+        "kind": {
+          "exists": "child_count_text",
+          "present": "folder",
+          "absent": "bookmark"
+        },
+        "variants": {
+          "folder": {
+            "child_count": "child_count_text"
+          },
+          "bookmark": {
+            "displayed_address": [
+              "url",
+              "description"
+            ],
+            "accessibility_description": {
+              "attribute": "content-desc"
+            }
+          }
+        },
+        "sections": {
+          "container": {
+            "resource_id": "selectable_list_recycler_view"
+          },
+          "source": "title"
+        },
+        "action": {
+          "kind": "folder",
+          "attribute": "content-desc",
+          "package_name": "com.android.chrome",
+          "missing_reason": "Chrome bookmark description is unavailable"
+        }
+      },
+      "recent_tabs": {
+        "row": {
+          "resource_id": "recent_tabs_list_item_layout"
+        },
+        "fields": {
+          "title": "title_row",
+          "domain": "domain_row"
+        },
+        "required": [
+          "title"
+        ],
+        "group": {
+          "selector": {
+            "resource_id": "recent_tabs_group_view"
+          },
+          "source": "device_label",
+          "field": "group",
+          "keep_empty": true,
+          "exclusive": true
+        },
+        "exclude": {
+          "field": "title",
+          "equals": "Show full history",
+          "absent": "domain_row"
+        }
+      },
+      "account": {
+        "row": {
+          "resource_id": "account_management_account_row"
+        },
+        "fields": {
+          "display_name": "title",
+          "email": "summary"
+        },
+        "optional": [
+          "display_name",
+          "email"
+        ],
+        "first": true
+      }
+    }
+  }
 }

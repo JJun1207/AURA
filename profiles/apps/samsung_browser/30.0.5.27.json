@@ -1,0 +1,493 @@
+{
+  "app_id": "samsung_browser",
+  "package_name": "com.sec.android.app.sbrowser",
+  "app_version": "30.0.5.27",
+  "acquisition_methods": [
+    "materialize"
+  ],
+  "targets": [
+    {
+      "target_id": "samsung_browser.history",
+      "item_types": [
+        "history_collection",
+        "history_entry"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "ui_observation"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
+      "rules": {
+        "identification": {
+          "id": "samsung_browser.parse_history",
+          "parameters": {
+            "counted_item_types": [
+              "history_entry"
+            ],
+            "ui_criteria": {
+              "identity_fields": [
+                "date_group",
+                "title",
+                "displayed_address",
+                "displayed_time"
+              ],
+              "window_merge": "longest_adjacent_ordered_record_overlap",
+              "group_indicator_resource_id": "group_header_indicator",
+              "collapsed_description": "Expand",
+              "expanded_description": "Collapse",
+              "parser_spec": {
+                "parameter": "list_parsing.history",
+                "sha256": "e6b432e128e9ff544ccf498f2b7b277e7ca7fc1f9c8dc2b824b81f5e3c133540"
+              }
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "samsung_browser.history.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "repeated_hierarchy_with_expanded_date_groups"
+            ]
+          }
+        },
+        "result": {
+          "id": "samsung_browser.history.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "ui_observation": [
+                "screen_image",
+                "ui_hierarchy"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "samsung_browser.history.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      },
+      "environment_rationale": {
+        "device_only": "Enumerate locally displayed visits and expand date groups without opening individual history entries; retain separate duplicate visits.",
+        "controlled_online": "Enumerate the same visit list with connectivity available; startup or app refresh can add history entries."
+      }
+    },
+    {
+      "target_id": "samsung_browser.downloads",
+      "item_types": [
+        "download_collection",
+        "download_entry"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "ui_observation"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
+      "rules": {
+        "identification": {
+          "id": "samsung_browser.parse_downloads",
+          "parameters": {
+            "counted_item_types": [
+              "download_entry"
+            ],
+            "ui_criteria": {
+              "parser_spec": {
+                "parameter": "list_parsing.downloads",
+                "sha256": "3801aa115877eebb652158ad48ea6192dd0ed1b307bd2a7ba61b4e8b97632b59"
+              }
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "samsung_browser.downloads.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "repeated_hierarchy"
+            ]
+          }
+        },
+        "result": {
+          "id": "samsung_browser.downloads.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "ui_observation": [
+                "screen_image",
+                "ui_hierarchy"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "samsung_browser.downloads.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      },
+      "environment_rationale": {
+        "device_only": "Retain the existing download-entry list without starting new downloads; this target does not acquire the original files.",
+        "controlled_online": "Retain the download-entry list in the connected session, with the same list-only scope."
+      }
+    },
+    {
+      "target_id": "samsung_browser.saved_pages",
+      "item_types": [
+        "saved_page_collection",
+        "saved_page_entry"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "ui_observation"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
+      "rules": {
+        "identification": {
+          "id": "samsung_browser.parse_saved_pages",
+          "parameters": {
+            "counted_item_types": [
+              "saved_page_entry"
+            ],
+            "ui_criteria": {
+              "parser_spec": {
+                "parameter": "list_parsing.saved_pages",
+                "sha256": "f1abb2f67bf0b7787d2a25cd3513b978dcc4b7bbf94666d0feb47ce6c1f3d69a"
+              }
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "samsung_browser.saved_pages.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "repeated_hierarchy"
+            ]
+          }
+        },
+        "result": {
+          "id": "samsung_browser.saved_pages.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "ui_observation": [
+                "screen_image",
+                "ui_hierarchy"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "samsung_browser.saved_pages.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      },
+      "environment_rationale": {
+        "device_only": "Retain locally displayed saved-page entries; the implemented target is the list rather than saved-page file extraction.",
+        "controlled_online": "Retain the same saved-page list with connectivity available; no additional original-file procedure is implied."
+      }
+    },
+    {
+      "target_id": "samsung_browser.bookmarks",
+      "item_types": [
+        "bookmark_collection",
+        "bookmark_entry"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "ui_observation"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
+      "rules": {
+        "identification": {
+          "id": "samsung_browser.parse_bookmarks",
+          "parameters": {
+            "counted_item_types": [
+              "bookmark_entry"
+            ],
+            "ui_criteria": {
+              "parser_spec": {
+                "parameter": "list_parsing.bookmarks",
+                "sha256": "ab09cca4b3579767e1b2737e236930fc5d0f1db2777a76ac47b2f06802d73d1c"
+              }
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "samsung_browser.bookmarks.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "repeated_hierarchy"
+            ]
+          }
+        },
+        "result": {
+          "id": "samsung_browser.bookmarks.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "ui_observation": [
+                "screen_image",
+                "ui_hierarchy"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "samsung_browser.bookmarks.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      },
+      "environment_rationale": {
+        "device_only": "Traverse the bookmark folders and entries already available in the local UI.",
+        "controlled_online": "Traverse the same bookmark UI with synchronization available; retain the entries actually exposed by the app."
+      }
+    }
+  ],
+  "selectors": {
+    "samsung_browser.main": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.main.resource-id",
+        "value": "com.sec.android.app.sbrowser:id/action_more"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.menu": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.menu.resource-id",
+        "value": "com.sec.android.app.sbrowser:id/action_more"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.menu.list": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.menu.list.resource-id",
+        "value": "com.sec.android.app.sbrowser:id/tools_recycler_view"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.menu.history": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.menu.history.text",
+        "value": "History"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.menu.downloads": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.menu.downloads.text",
+        "value": "Downloads"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.menu.saved-pages": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.menu.saved-pages.text",
+        "value": "Saved pages"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.bookmarks": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.bookmarks.resource-id",
+        "value": "com.sec.android.app.sbrowser:id/action_bookmarks"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.screen.history": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.screen.history.resource-id",
+        "value": "com.sec.android.app.sbrowser:id/history_container"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.screen.downloads": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.screen.downloads.resource-id",
+        "value": "com.sec.android.app.sbrowser:id/download_history_main_content"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.screen.saved-pages": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.screen.saved-pages.resource-id",
+        "value": "com.sec.android.app.sbrowser:id/saved_page_view_main_layout"
+      },
+      "constraints": {}
+    },
+    "samsung_browser.screen.bookmarks": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.sec.android.app.sbrowser",
+        "selector_id": "samsung-browser.screen.bookmarks.resource-id",
+        "value": "com.sec.android.app.sbrowser:id/bookmark_screen_root"
+      },
+      "constraints": {}
+    }
+  },
+  "timings": {
+    "default_timeout": 5.0,
+    "poll_interval": 0.2,
+    "transition_settle": 0.4,
+    "application_start_settle": 0.8,
+    "history_group_expand_timeout": 5.0,
+    "scroll_settle": 0.4,
+    "history_group_expand_settle": 0.4
+  },
+  "parameters": {
+    "ui_fields": {
+      "bookmark_folder_title": "bookmark_folder_title",
+      "displayed_view": "displayed_view",
+      "download_item_parent": "download_item_parent",
+      "download_item_title": "download_item_title",
+      "download_item_total_size": "download_item_total_size",
+      "download_item_url": "download_item_url",
+      "history_relative": "history_relative",
+      "history_time": "history_time",
+      "history_title": "history_title",
+      "history_url": "history_url",
+      "saved_page_list_view_description_text_view": "saved_page_list_view_description_text_view",
+      "saved_page_list_view_layout": "saved_page_list_view_layout",
+      "saved_page_list_view_title_text_view": "saved_page_list_view_title_text_view",
+      "saved_page_list_view_url_text_view": "saved_page_list_view_url_text_view",
+      "title": "title",
+      "group_header_indicator": "group_header_indicator"
+    },
+    "display_text": {
+      "history_expand": "Expand",
+      "history_collapse": "Collapse",
+      "history_header_collapsed": "Expand",
+      "history_header_expanded": "Collapse"
+    },
+    "list_parsing": {
+      "history": {
+        "row": {
+          "resource_id": "history_relative"
+        },
+        "fields": {
+          "title": "history_title",
+          "displayed_address": "history_url",
+          "displayed_time": "history_time"
+        },
+        "required": [
+          "title"
+        ],
+        "group": {
+          "selector": {
+            "resource_id": "title"
+          },
+          "source": {
+            "attribute": "text"
+          },
+          "field": "date_group"
+        }
+      },
+      "downloads": {
+        "row": {
+          "resource_id": "download_item_parent"
+        },
+        "fields": {
+          "title": "download_item_title",
+          "source": "download_item_url",
+          "displayed_size": "download_item_total_size"
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "saved_pages": {
+        "row": {
+          "resource_id": "saved_page_list_view_layout"
+        },
+        "fields": {
+          "title": "saved_page_list_view_title_text_view",
+          "displayed_address": "saved_page_list_view_url_text_view",
+          "description": "saved_page_list_view_description_text_view"
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "bookmarks": {
+        "row": {
+          "resource_id": "displayed_view"
+        },
+        "fields": {
+          "title": "bookmark_folder_title"
+        },
+        "required": [
+          "title"
+        ]
+      }
+    }
+  }
+}

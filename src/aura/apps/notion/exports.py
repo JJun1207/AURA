@@ -1,24 +1,30 @@
 """Notion 0.6.4030 native Export collection."""
 
 from __future__ import annotations
+from ...artifacts import pull_bytes
+from ...collection import one_candidate, display_text, poll_samples, stability_probe
+
 
 import hashlib
 from collections.abc import Mapping
 from io import BytesIO
 from itertools import count
-from pathlib import Path, PurePosixPath
-from tempfile import TemporaryDirectory
+from pathlib import PurePosixPath
 import xml.etree.ElementTree as ET
 from zipfile import BadZipFile, ZipFile
 
-from PIL import Image, UnidentifiedImageError
 
-from ...ui import UiTimeout
-from .attachments import _await_stable_change, _scan_files
+from ...models import AcquisitionStatus, ProcedureStatus
+from ...ui import UiTimeout, hierarchy_signature
+from .attachments import (
+    AttachmentCollectionError, select_changed_file, _scan_files, _bottom_actions,
+)
 from .pages import (
     _action_name,
     _discover_top_level_pages,
     _find_home_item,
+    _parse_page_entry,
+    _verify_open_page,
     parse_page,
 )
 from .support import (
@@ -28,6 +34,7 @@ from .support import (
     item_attempt,
     onscreen,
     output_action,
+    page_actions_bounds,
     retain_pair,
     safe_component,
     selector,
@@ -42,33 +49,36 @@ class ExportCollectionError(NotionCollectorError):
         *,
         action=None,
         report=None,
+        payload=None,
     ):
         super().__init__(reason_code)
         self.reason_code = reason_code
         self.action = action
         self.report = report or {}
         self.completed_record = None
+        self.payload = payload
 
 
 def _unique(root: ET.Element, predicate, reason: str) -> ET.Element:
     matches = [
         node
         for node in root.iter()
-        if onscreen(node) and predicate(node)
+        if onscreen(node, root) and predicate(node)
     ]
-    if len(matches) != 1:
-        raise ExportCollectionError(reason)
-    return matches[0]
+    try:
+        return one_candidate(matches)
+    except ValueError:
+        raise ExportCollectionError(reason) from None
 
 
 def parse_actions_export(
     root: ET.Element,
-) -> tuple[int, int, int, int]:
+ profile) -> tuple[int, int, int, int]:
     node = _unique(
         root,
         lambda item: (
             item.get("class") == "android.view.MenuItem"
-            and item.get("text") == "Export"
+            and item.get("text") == display_text(profile, 'export')
             and item.get("clickable") == "true"
             and item.get("enabled") == "true"
         ),
@@ -77,13 +87,13 @@ def parse_actions_export(
     return bounds(node)
 
 
-def parse_export_dialog(root: ET.Element) -> dict[str, object]:
+def parse_export_dialog(root: ET.Element, profile) -> dict[str, object]:
     format_node = _unique(
         root,
         lambda item: (
             item.get("class") == "android.widget.Button"
             and item.get("clickable") == "true"
-            and item.get("text", "").startswith("Export format ")
+            and item.get("text", "").startswith(display_text(profile, 'export_format_prefix'))
         ),
         "notion_export_format_unavailable",
     )
@@ -92,7 +102,7 @@ def parse_export_dialog(root: ET.Element) -> dict[str, object]:
         lambda item: (
             item.get("class") == "android.view.MenuItem"
             and item.get("clickable") == "true"
-            and item.get("text") == "Include subpages"
+            and item.get("text") == display_text(profile, 'include_subpages')
         ),
         "notion_export_subpages_control_unavailable",
     )
@@ -101,14 +111,14 @@ def parse_export_dialog(root: ET.Element) -> dict[str, object]:
         lambda item: (
             item.get("class") == "android.widget.Button"
             and item.get("clickable") == "true"
-            and item.get("text") == "Export"
+            and item.get("text") == display_text(profile, 'export')
             and bounds(item)[1] > bounds(include_node)[3]
         ),
         "notion_export_submit_unavailable",
     )
     return {
         "format": format_node.get("text", "").removeprefix(
-            "Export format "
+            display_text(profile, 'export_format_prefix')
         ),
         "format_bounds": bounds(format_node),
         "include_subpages_bounds": bounds(include_node),
@@ -118,56 +128,18 @@ def parse_export_dialog(root: ET.Element) -> dict[str, object]:
 
 def parse_export_format_option(
     root: ET.Element,
-) -> tuple[int, int, int, int]:
+ profile) -> tuple[int, int, int, int]:
     node = _unique(
         root,
         lambda item: (
             item.get("class") == "android.view.MenuItem"
             and item.get("clickable") == "true"
             and item.get("enabled") == "true"
-            and item.get("text") == "Markdown & CSV"
+            and item.get("text") == display_text(profile, 'markdown_csv')
         ),
         "notion_export_markdown_csv_unavailable",
     )
     return bounds(node)
-
-
-def include_subpages_enabled(
-    screen: bytes,
-    row_bounds: tuple[int, int, int, int],
-) -> bool:
-    left, top, right, bottom = row_bounds
-    try:
-        with Image.open(BytesIO(screen)) as source:
-            image = source.convert("RGB")
-    except (OSError, UnidentifiedImageError):
-        raise ExportCollectionError(
-            "notion_export_subpages_screen_invalid"
-        ) from None
-    if (
-        left < 0
-        or top < 0
-        or right <= left
-        or bottom <= top
-        or right > image.width
-        or bottom > image.height
-    ):
-        raise ExportCollectionError(
-            "notion_export_subpages_bounds_invalid"
-        )
-    switch = image.crop((
-        left + (right - left) * 3 // 4,
-        top,
-        right,
-        bottom,
-    ))
-    blue = sum(
-        pixel_blue - red > 80
-        and pixel_blue - green > 30
-        and pixel_blue > 150
-        for red, green, pixel_blue in switch.getdata()
-    )
-    return blue >= 100
 
 
 def parse_export_preview(root: ET.Element) -> dict[str, object]:
@@ -180,15 +152,7 @@ def parse_export_preview(root: ET.Element) -> dict[str, object]:
         ),
         "notion_export_preview_filename_unavailable",
     )
-    actions = [
-        node
-        for node in root.iter()
-        if onscreen(node)
-        and node.get("class") == "android.view.View"
-        and node.get("clickable") == "true"
-        and node.get("enabled") == "true"
-        and bounds(node)[1] >= 2000
-    ]
+    actions = _bottom_actions(root)
     if len(actions) != 2:
         raise ExportCollectionError(
             "notion_export_download_action_unavailable"
@@ -237,13 +201,14 @@ def _wait_for_parse(context, parser, reason: str):
     return parsed
 
 
-def _observe_parse(context, observation_id, action, parser, reason: str):
+def _observe_parse(context, observation_id, action, parser, reason: str, *, timeout=None):
     try:
         observation = observe(
             context,
             observation_id,
             action,
             parser,
+            timeout=timeout,
         )
     except NotionCollectorError:
         raise ExportCollectionError(reason, action=action) from None
@@ -252,31 +217,30 @@ def _observe_parse(context, observation_id, action, parser, reason: str):
 
 def _observe_open_page(context, sequence, page, action):
     title = str(page["title"])
-    return _observe_parse(
+    observation, parsed = _observe_parse(
         context,
         _action_name(sequence, "observation_notion_export_page"),
         action,
-        lambda root: parse_page(root, title),
+        lambda root: _parse_page_entry(root, title, context.app_profile),
         "notion_export_page_unavailable",
+        timeout=context.app_profile.timings["export_page_entry_timeout"],
     )
+    if parsed["classification"] == "retained_position":
+        try:
+            action, observation = _verify_open_page(context, sequence, page, action, observation)
+            parsed = parse_page(observation["root"], title, context.app_profile)
+        except NotionCollectorError as error:
+            raise ExportCollectionError(str(error), action=getattr(error, "action", None) or action) from error
+    return observation, parsed
 
 
 def _actions_bounds(root: ET.Element):
-    matches = {
-        bounds(item)
-        for item in root.iter()
-        if onscreen(item)
-        and (
-            item.get("class") == "android.widget.Button"
-            and item.get("clickable") == "true"
-            and item.get("content-desc") == "Actions"
-        )
-    }
-    if len(matches) != 1:
+    try:
+        return page_actions_bounds(root)
+    except NotionCollectorError:
         raise ExportCollectionError(
             "notion_export_actions_unavailable"
-        )
-    return matches.pop()
+        ) from None
 
 
 def _open_export_dialog(
@@ -298,10 +262,10 @@ def _open_export_dialog(
     seen = set()
     while True:
         try:
-            export_bounds = parse_actions_export(observation["root"])
+            export_bounds = parse_actions_export(observation["root"], profile=context.app_profile)
             break
         except ExportCollectionError:
-            signature = observation["tree"]
+            signature = hierarchy_signature(observation["root"])
             if signature in seen:
                 raise ExportCollectionError(
                     "notion_export_action_unavailable",
@@ -311,6 +275,7 @@ def _open_export_dialog(
             action = context.ui.swipe(
                 _action_name(sequence, "notion_scroll_page_actions"),
                 "up",
+                distance_ratio=context.app_profile.parameters["menu_scroll_ratio"],
                 context={"page_ref": page_ref},
             )
             observation = observe(
@@ -331,7 +296,7 @@ def _open_export_dialog(
         context,
         _action_name(sequence, "observation_notion_export_dialog"),
         action,
-        parse_export_dialog,
+        lambda root: parse_export_dialog(root, profile=context.app_profile),
         "notion_export_dialog_unavailable",
     )
     return action, observation
@@ -344,8 +309,8 @@ def _configure_export_dialog(
     action,
     observation,
 ):
-    dialog = parse_export_dialog(observation["root"])
-    if dialog["format"] != "Markdown & CSV":
+    dialog = parse_export_dialog(observation["root"], profile=context.app_profile)
+    if dialog["format"] != display_text(context.app_profile, 'markdown_csv'):
         action = context.ui.click_bounds(
             _action_name(sequence, "notion_open_export_formats"),
             dialog["format_bounds"],
@@ -353,7 +318,7 @@ def _configure_export_dialog(
         )
         format_bounds = _wait_for_parse(
             context,
-            parse_export_format_option,
+            lambda root: parse_export_format_option(root, profile=context.app_profile),
             "notion_export_markdown_csv_unavailable",
         )
         action = context.ui.click_bounds(
@@ -368,41 +333,29 @@ def _configure_export_dialog(
                 "observation_notion_export_dialog",
             ),
             action,
-            parse_export_dialog,
+            lambda root: parse_export_dialog(root, profile=context.app_profile),
             "notion_export_dialog_unavailable",
         )
-        if dialog["format"] != "Markdown & CSV":
+        if dialog["format"] != display_text(context.app_profile, 'markdown_csv'):
             raise ExportCollectionError(
                 "notion_export_format_unverified",
                 action=action,
             )
 
-    if not include_subpages_enabled(
-        observation["screen"],
+    # ponytail: a newly opened dialog defaults Off; revalidate this procedure if
+    # a future app version remembers the option. XML does not expose its state.
+    action = context.ui.click_bounds(
+        _action_name(sequence, "notion_enable_export_subpages"),
         dialog["include_subpages_bounds"],
-    ):
-        action = context.ui.click_bounds(
-            _action_name(sequence, "notion_enable_export_subpages"),
-            dialog["include_subpages_bounds"],
-            context={"page_ref": page_ref},
-        )
-        observation = observe(
-            context,
-            _action_name(
-                sequence,
-                "observation_notion_export_subpages",
-            ),
-            action,
-        )
-        dialog = parse_export_dialog(observation["root"])
-        if not include_subpages_enabled(
-            observation["screen"],
-            dialog["include_subpages_bounds"],
-        ):
-            raise ExportCollectionError(
-                "notion_export_subpages_unverified",
-                action=action,
-            )
+        context={"page_ref": page_ref, "include_subpages_basis": "default_off_single_click"},
+    )
+    observation, dialog = _observe_parse(
+        context,
+        _action_name(sequence, "observation_notion_export_subpages"),
+        action,
+        lambda root: parse_export_dialog(root, profile=context.app_profile),
+        "notion_export_dialog_unavailable",
+    )
     return action, observation, dialog
 
 
@@ -417,26 +370,61 @@ def _pull_export(context, remote_path: str, expected_size: int) -> bytes:
     ):
         raise ExportCollectionError("notion_export_path_invalid")
     try:
-        with TemporaryDirectory() as directory:
-            local = Path(directory) / "export.zip"
-            context.device.pull(path.as_posix(), local)
-            payload = local.read_bytes()
+        payload = pull_bytes(context.device, path.as_posix(), filename='export.zip')
     except Exception:
         raise ExportCollectionError(
             "notion_export_pull_failed"
         ) from None
     if len(payload) != expected_size:
-        raise ExportCollectionError("notion_export_size_changed")
+        raise ExportCollectionError("notion_export_size_changed", payload=payload)
     try:
         with ZipFile(BytesIO(payload)) as archive:
             corrupt = archive.testzip()
     except (BadZipFile, OSError):
         raise ExportCollectionError(
-            "notion_export_zip_invalid"
+            "notion_export_zip_invalid", payload=payload,
         ) from None
     if corrupt is not None:
-        raise ExportCollectionError("notion_export_zip_corrupt")
+        raise ExportCollectionError("notion_export_zip_corrupt", payload=payload)
     return payload
+
+
+def _await_export(context, baseline, filename, action):
+    root = _export_root(context)
+    stable, state = stability_probe(
+        lambda: _scan_files(context, (root,)),
+        key=lambda current: select_changed_file(baseline, current),
+        retry_errors=(AttachmentCollectionError,),
+    )
+    last_error = ExportCollectionError("notion_attachment_inventory_did_not_settle", action=action)
+    for ready in poll_samples(stable,
+            timeout=context.app_profile.timings["export_download_timeout"],
+            interval=context.app_profile.timings["inventory_probe_interval"]):
+        if not ready:
+            continue
+        remote_path, size, modified = state["key"]
+        if PurePosixPath(remote_path).name != filename:
+            raise ExportCollectionError("notion_export_filename_mismatch", action=action)
+        try:
+            payload = _pull_export(context, remote_path, size)
+        except ExportCollectionError as error:
+            if error.reason_code not in {
+                "notion_export_size_changed", "notion_export_zip_invalid", "notion_export_zip_corrupt",
+            }:
+                error.action = action
+                raise
+            error.action = action
+            last_error = error
+            context.journal.record_action("notion_wait_export_zip", status="waiting",
+                context=dict(action.context), details={
+                    "device_source_path": remote_path, "candidate_size": size,
+                    "candidate_mtime": modified, "received_size": len(error.payload),
+                    "received_sha256": hashlib.sha256(error.payload).hexdigest(),
+                    "validation_reason": error.reason_code,
+                })
+            continue
+        return remote_path, payload
+    raise last_error
 
 
 def _return_to_page(
@@ -445,41 +433,32 @@ def _return_to_page(
     page: Mapping[str, object],
     action,
 ):
-    title = str(page["title"])
     seen = set()
-    while True:
-        action = context.ui.back(
-            _action_name(sequence, "notion_close_export_surface"),
-            context={"page_ref": page["page_ref"]},
-        )
-        observation = observe(
-            context,
-            _action_name(
-                sequence,
-                "observation_notion_export_return",
-            ),
-            action,
-        )
+    # Preview may return directly to the page, or through the still-open
+    # Export dialog and Actions sheet. Each known sheet is dismissed once.
+    for _ in range(3):
+        action = context.ui.back(_action_name(sequence, "notion_close_export_surface"),
+                                 context=dict(action.context))
+        observation = observe(context, _action_name(sequence, "observation_notion_export_return"), action)
+        retain_pair(context, f"notion/diagnostics/export-return-{action.action_id}",
+                    observation, action, dict(action.context))
         try:
-            parse_page(observation["root"], title)
+            parse_page(observation["root"], str(page["title"]), context.app_profile)
             return action
         except NotionCollectorError:
             pass
-        if context.ui.wait_for(
-            selector(context, "notion.home"),
-            timeout=0,
-        ):
-            raise ExportCollectionError(
-                "notion_export_page_return_failed",
-                action=action,
-            )
-        signature = observation["tree"]
-        if signature in seen:
-            raise ExportCollectionError(
-                "notion_export_page_return_failed",
-                action=action,
-            )
-        seen.add(signature)
+        surface = None
+        for name, parser in (("dialog", parse_export_dialog), ("actions", parse_actions_export)):
+            try:
+                parser(observation["root"], context.app_profile)
+                surface = name
+                break
+            except NotionCollectorError:
+                pass
+        if surface is None or surface in seen:
+            break
+        seen.add(surface)
+    raise ExportCollectionError("notion_export_page_return_failed", action=action)
 
 
 def _page_prefix(
@@ -518,13 +497,22 @@ def _export_page(
         page_ref,
         observation,
     )
-    action, dialog_observation, dialog = _configure_export_dialog(
-        context,
-        sequence,
-        page_ref,
-        action,
-        dialog_observation,
-    )
+    try:
+        action, dialog_observation, dialog = _configure_export_dialog(
+            context, sequence, page_ref, action, dialog_observation,
+        )
+    except ExportCollectionError as error:
+        failed_action = error.action or action
+        try:
+            failure = observe(context, _action_name(sequence, "notion_export_configuration_failure"), failed_action)
+            retain_pair(context, f"{_page_prefix(workspace_prefix, page)}/configuration-failure", failure,
+                        failed_action, {"target_ref": target_ref, "workspace_ref": workspace_ref,
+                                        "page_ref": page_ref, "page_kind": parsed["classification"]})
+        except Exception as capture_error:
+            context.journal.record_action("notion_export_failure_evidence", status="failed",
+                context={"page_ref": page_ref}, details={"error": str(capture_error)})
+        error.action = failed_action
+        raise
     root = _export_root(context)
     baseline = _scan_files(context, (root,))
     linked = {
@@ -534,6 +522,10 @@ def _export_page(
         "notion_page_id": page["notion_page_id"],
         "page_kind": parsed["classification"],
     }
+    prefix = _page_prefix(workspace_prefix, page)
+    configuration_source = retain_pair(
+        context, f"{prefix}/export-settings", dialog_observation, action, linked,
+    )
     action = context.ui.click_bounds(
         _action_name(sequence, "notion_submit_export"),
         dialog["export_bounds"],
@@ -545,8 +537,8 @@ def _export_page(
         action,
         parse_export_preview,
         "notion_export_preview_unavailable",
+        timeout=context.app_profile.timings['export_preview_timeout'],
     )
-    prefix = _page_prefix(workspace_prefix, page)
     source = retain_pair(
         context,
         f"{prefix}/export-screen",
@@ -560,11 +552,21 @@ def _export_page(
         context=linked,
     )
     try:
-        remote_path, size, _ = _await_stable_change(
-            context,
-            (root,),
-            baseline,
-        )
+        remote_path, payload = _await_export(context, baseline, preview["filename"], download_action)
+    except ExportCollectionError as error:
+        if error.payload is not None:
+            diagnostic_context = {
+                **linked, "observation_id": source["observation_id"],
+                "device_source_path": (root / preview["filename"]).as_posix(),
+                "validation_reason": error.reason_code, "completion_wait_exhausted": True,
+            }
+            attempt_id = item_attempt(context, diagnostic_context,
+                record_kind="notion_page_export", prefix=prefix)
+            retained = output_action(context, attempt_id, download_action, diagnostic_context)
+            context.artifacts.write_bytes(f"{prefix}/incomplete-export.zip", error.payload,
+                kind="diagnostic", attempt_id=attempt_id, action=retained,
+                context=diagnostic_context)
+        raise
     except NotionCollectorError as error:
         raise ExportCollectionError(
             getattr(
@@ -575,17 +577,11 @@ def _export_page(
             action=download_action,
         ) from error
     basename = PurePosixPath(remote_path).name
-    if basename != preview["filename"]:
-        raise ExportCollectionError(
-            "notion_export_filename_mismatch",
-            action=download_action,
-        )
-    payload = _pull_export(context, remote_path, size)
     pull_action = context.journal.record_action(
         _action_name(sequence, "notion_pull_export"),
         status="success",
         context=linked,
-        details={"device_source_path": remote_path, "size": size},
+        details={"device_source_path": remote_path, "size": len(payload)},
     )
     artifact_context = {
         **linked,
@@ -620,6 +616,8 @@ def _export_page(
         "classification": parsed["classification"],
         "export_format": "markdown_csv",
         "include_subpages": True,
+        "include_subpages_basis": "default_off_single_click",
+        "configuration_source": configuration_source,
         "device_source_path": remote_path,
         "retained_basename": basename,
         "size": len(payload),
@@ -717,28 +715,6 @@ def _write_summary(
     }
 
 
-def _recover_home(context, sequence, page_ref: str, action):
-    home = selector(context, "notion.home")
-    seen = set()
-    while not context.ui.wait_for(home, timeout=0):
-        action = context.ui.back(
-            _action_name(sequence, "notion_recover_export_home"),
-            context={"page_ref": page_ref},
-        )
-        observation = observe(
-            context,
-            _action_name(
-                sequence,
-                "observation_notion_export_recovery",
-            ),
-            action,
-        )
-        if observation["tree"] in seen:
-            break
-        seen.add(observation["tree"])
-    return action
-
-
 def _collect_top_level_export(
     context,
     sequence,
@@ -803,6 +779,13 @@ def _collect_top_level_export(
         )
         error.completed_record = record
         raise error from failure
+    attempt_id = item_attempt(
+        context,
+        {"target_ref": target_ref, "workspace_ref": workspace_ref,
+         "page_ref": page_ref, "page_kind": record["classification"]},
+        record_kind="notion_page_export",
+    )
+    context.finish_attempt(attempt_id, ProcedureStatus.COMPLETED, AcquisitionStatus.ACQUIRED)
     return record, last_action
 
 
@@ -811,6 +794,7 @@ def collect_workspace_exports(
     workspace: Mapping[str, object],
     workspace_prefix: str,
     target_ref: str,
+    *, entry=None,
 ) -> dict[str, object]:
     workspace_ref = str(workspace["workspace_ref"])
     sequence = count(1)
@@ -819,6 +803,7 @@ def collect_workspace_exports(
         context,
         sequence,
         workspace_ref,
+        entry=entry,
     )
     pages = tuple(inventory.values())
     for page_index, page in enumerate(pages):
@@ -883,15 +868,7 @@ def collect_workspace_exports(
                 }
                 for pending in pages[page_index + 1:]
             )
-            try:
-                last_action = _recover_home(
-                    context,
-                    sequence,
-                    page_ref,
-                    error.action or last_action,
-                )
-            except (NotionCollectorError, UiTimeout):
-                last_action = error.action or last_action
+            last_action = error.action or last_action
             document = _summary_document(
                 target_ref,
                 workspace_ref,

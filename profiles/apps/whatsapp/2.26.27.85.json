@@ -22,6 +22,9 @@
       "expected_artifacts": [
         "structured_data"
       ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
       "rules": {
         "identification": {
           "id": "whatsapp.parse_message_window",
@@ -64,6 +67,10 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "Enumerate locally available chat and message records before network access; document display information remains part of these records.",
+        "controlled_online": "Use the same chat/message traversal with connectivity available; only the implemented record types are in scope."
       }
     },
     {
@@ -80,6 +87,9 @@
       "expected_artifacts": [
         "structured_data",
         "saved_file"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
       ],
       "rules": {
         "identification": {
@@ -131,6 +141,10 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "Attempt the implemented photo/video save procedures for locally available media. Document originals are not implemented by this Materialize target.",
+        "controlled_online": "Allow supported photo/video retrieval with network access, subject to actual app availability."
       }
     },
     {
@@ -140,10 +154,14 @@
       ],
       "method": "export",
       "acquisition_environments": [
-        "device_only"
+        "device_only",
+        "controlled_online"
       ],
       "expected_artifacts": [
         "export_file"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
       ],
       "rules": {
         "identification": {
@@ -187,6 +205,72 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "The native chat export can package locally available conversations and send them through Bluetooth without Wi-Fi; the Windows receiver must complete and preserve the file.",
+        "controlled_online": "Permit the same native export and Bluetooth delivery after network access is enabled."
+      }
+    },
+    {
+      "target_id": "whatsapp.export_summary",
+      "item_types": [
+        "conversation_collection"
+      ],
+      "method": "export",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
+      "rules": {
+        "identification": {
+          "id": "whatsapp.active_export_summary",
+          "parameters": {
+            "counted_item_types": [
+              "conversation_collection"
+            ],
+            "ui_criteria": {
+              "identity_basis": "active_list_ordinal",
+              "surface": "active_chat_list"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "whatsapp.export_summary.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "active_chat_list_exhausted"
+            ]
+          }
+        },
+        "result": {
+          "id": "whatsapp.export_summary.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record",
+                "structured_json"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "whatsapp.export_summary.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      },
+      "environment_rationale": {
+        "device_only": "Retain traversal and per-chat export outcomes for the authorized offline chat-export procedure, including failures and retries.",
+        "controlled_online": "Retain traversal and per-chat export outcomes for the authorized connected chat-export procedure under the same reporting rules."
       }
     }
   ],
@@ -436,7 +520,7 @@
     "share_target_wait": 1.0,
     "inventory_probe_interval": 0.2,
     "windows_receiver_timeout": 10.0,
-    "export_receipt_timeout": 90.0,
+    "export_receipt_timeout": 180.0,
     "export_receipt_poll_interval": 0.2
   },
   "parameters": {
@@ -448,6 +532,7 @@
       "video": [
         "/sdcard/Movies/WhatsApp"
       ]
-    }
+    },
+    "export_attempts": 2
   }
 }

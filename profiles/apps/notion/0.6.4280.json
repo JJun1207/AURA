@@ -1,0 +1,480 @@
+{
+  "app_id": "notion",
+  "package_name": "notion.id",
+  "app_version": "0.6.4280",
+  "acquisition_methods": [
+    "materialize",
+    "export"
+  ],
+  "targets": [
+    {
+      "target_id": "notion.inventory",
+      "item_types": [
+        "account",
+        "account_collection",
+        "workspace",
+        "page_listing"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "device_only",
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
+      "rules": {
+        "identification": {
+          "id": "notion.workspace_home_inventory",
+          "parameters": {
+            "counted_item_types": [
+              "account",
+              "workspace",
+              "page_listing"
+            ],
+            "ui_criteria": {
+              "identity_fields": [
+                "workspace_ref",
+                "page_ref"
+              ]
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "notion.inventory.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "all_workspaces_visited"
+            ]
+          }
+        },
+        "result": {
+          "id": "notion.inventory.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "notion.inventory.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      },
+      "environment_rationale": {
+        "device_only": "Retain account/workspace and available Home listings, including any Offline pages carousel exposed by the UI, without opening page bodies. Page bodies and attachments have separate acquisition targets.",
+        "controlled_online": "Retain the same account/workspace/Home inventory with connectivity available, independently of detailed content acquisition."
+      }
+    },
+    {
+      "target_id": "notion.members",
+      "item_types": [
+        "workspace_members"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
+      "rules": {
+        "identification": {
+          "id": "notion.workspace_members",
+          "parameters": {
+            "counted_item_types": [
+              "workspace_members"
+            ],
+            "ui_criteria": {
+              "members_scope": "selected_workspace"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "notion.members.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "all_workspaces_visited"
+            ]
+          }
+        },
+        "result": {
+          "id": "notion.members.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "notion.members.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      },
+      "environment_rationale": {
+        "device_only": "The retained S21/Notion 0.6.4280 device-only pilot displayed \"Please go online to manage settings.\" Exclude the Members view on the basis of this observed online requirement for membership settings.",
+        "controlled_online": "The connected Members view can expose workspace membership and related context; record unavailable or ambiguous results when encountered."
+      }
+    },
+    {
+      "target_id": "notion.content",
+      "item_types": [
+        "page",
+        "database_item"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
+      "rules": {
+        "identification": {
+          "id": "notion.workspace_page_and_database_identity",
+          "parameters": {
+            "counted_item_types": [
+              "page",
+              "database_item"
+            ],
+            "ui_criteria": {
+              "identity_fields": [
+                "workspace_ref",
+                "page_ref",
+                "database_item_ref"
+              ]
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "notion.content.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "all_workspaces_visited"
+            ]
+          }
+        },
+        "result": {
+          "id": "notion.content.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "notion.content.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      },
+      "environment_rationale": {
+        "device_only": "In the tested S21/Notion 0.6.4280 device-only state, pages did not load and could not be opened, as confirmed by the examiner; the retained run records notion_page_entry_unavailable for seven page targets. Body, subpage and database traversal could therefore not proceed. Exclude this procedure because page entry failed under the tested conditions. Locally stored bodies, if present, remain outside this profile's device-only scope.",
+        "controlled_online": "Use the implemented connected traversal for page bodies, subpages and database entries; retain per-item failures and partial records."
+      }
+    },
+    {
+      "target_id": "notion.attachments",
+      "item_types": [
+        "attachment"
+      ],
+      "method": "materialize",
+      "acquisition_environments": [
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "structured_data",
+        "downloaded_file"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
+      "rules": {
+        "identification": {
+          "id": "notion.parse_page_candidates",
+          "parameters": {
+            "counted_item_types": [
+              "attachment"
+            ],
+            "ui_criteria": {
+              "identity_basis": "parent_page_and_attachment_ref",
+              "external_urls": "out_of_scope"
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "notion.attachments.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "all_workspaces_visited"
+            ]
+          }
+        },
+        "result": {
+          "id": "notion.attachments.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "structured_data": [
+                "structured_data",
+                "ui_record"
+              ],
+              "downloaded_file": [
+                "downloaded_file",
+                "original_artifact",
+                "app_materialized_file"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "notion.attachments.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      },
+      "environment_rationale": {
+        "device_only": "In the tested S21/Notion 0.6.4280 device-only state, pages did not load/open, preventing entry to the page content needed for attachment identification and saving. Exclude this dependent procedure.",
+        "controlled_online": "Traverse page content and request supported attachment originals with network access available; verify the retained files."
+      }
+    },
+    {
+      "target_id": "notion.export",
+      "item_types": [
+        "page_export",
+        "database_export"
+      ],
+      "method": "export",
+      "acquisition_environments": [
+        "controlled_online"
+      ],
+      "expected_artifacts": [
+        "export_file"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
+      "rules": {
+        "identification": {
+          "id": "notion.top_level_export_scope",
+          "parameters": {
+            "counted_item_types": [
+              "page_export",
+              "database_export"
+            ],
+            "ui_criteria": {
+              "classification": [
+                "general",
+                "database"
+              ],
+              "format": "Markdown & CSV",
+              "include_subpages": true
+            }
+          }
+        },
+        "traversal_completion": {
+          "id": "notion.export.verified_ui_boundary",
+          "parameters": {
+            "completion_conditions": [
+              "all_workspaces_visited"
+            ]
+          }
+        },
+        "result": {
+          "id": "notion.export.required_artifacts",
+          "parameters": {
+            "required_artifacts": {
+              "export_file": [
+                "export_file",
+                "original_artifact",
+                "app_export"
+              ]
+            }
+          }
+        },
+        "error_handling": {
+          "id": "notion.export.preserve_partial",
+          "parameters": {
+            "on_interruption": "preserve_partial",
+            "fallbacks": {}
+          }
+        }
+      },
+      "environment_rationale": {
+        "device_only": "The retained S21/Notion 0.6.4280 device-only export run stopped because its first target page did not load/open (notion_export_page_unavailable), before reaching the native Export operation; no export file was obtained. Exclude this procedure because its page-entry prerequisite failed in the tested state.",
+        "controlled_online": "Run the native page/database export workflow with connectivity, including the configured Include subpages action and export-file checks."
+      }
+    }
+  ],
+  "selectors": {
+    "notion.home": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "notion.id",
+        "selector_id": "notion.home.resource-id",
+        "value": "vision_tab_Home"
+      },
+      "constraints": {
+        "class_name": "android.view.View",
+        "selected": true
+      }
+    },
+    "notion.workspace-menu.open": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "notion.id",
+        "selector_id": "notion.workspace-menu.open.resource-id",
+        "value": "vision_workspace_icon"
+      },
+      "constraints": {
+        "class_name": "android.view.View",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notion.workspace-menu.switch": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "notion.id",
+        "selector_id": "notion.workspace-menu.switch.resource-id",
+        "value": "home-tab.more.switch-workspace"
+      },
+      "constraints": {
+        "class_name": "android.view.View",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notion.workspace-menu.members": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "notion.id",
+        "selector_id": "notion.workspace-menu.members.resource-id",
+        "value": "home-tab.more.members"
+      },
+      "constraints": {
+        "class_name": "android.view.View",
+        "clickable": true,
+        "focusable": true
+      }
+    },
+    "notion.account-switcher": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "notion.id",
+        "selector_id": "notion.account-switcher.text",
+        "value": "Accounts"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "notion.members": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "notion.id",
+        "selector_id": "notion.members.text",
+        "value": "Members"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    }
+  },
+  "timings": {
+    "default_timeout": 5.0,
+    "page_entry_timeout": 10.0,
+    "export_page_entry_timeout": 5.0,
+    "poll_interval": 0.2,
+    "transition_settle": 0.8,
+    "application_start_settle": 1.0,
+    "inventory_probe_interval": 0.25,
+    "inventory_stable_for": 1.0,
+    "attachment_download_timeout": 60.0,
+    "board_alignment_duration": 0.4,
+    "export_preview_timeout": 60.0,
+    "export_download_timeout": 60.0,
+    "attachment_preview_timeout": 5.0
+  },
+  "parameters": {
+    "page_text_source": "clipboard",
+    "copy_menu_refresh_ratio": 0.15,
+    "page_discovery_scroll_ratio": 0.3,
+    "menu_scroll_ratio": 0.3,
+    "export_root": "/sdcard/Download/Notion",
+    "attachment_roots": [
+      "/sdcard/Download/Notion",
+      "/sdcard/Pictures/Notion",
+      "/sdcard/Movies/Notion",
+      "/sdcard/Music/Notion"
+    ],
+    "display_patterns": {
+      "page_row": "^home-tab\\.(private|shared|teamspaces?)\\.page-row\\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$",
+      "section_header": "^home-tab\\.sections\\.(private|shared|teamspaces?)-header$"
+    },
+    "display_text": {
+      "copy_page_contents": "Copy page contents",
+      "copied_page_contents": "Copied page contents",
+      "export": "Export",
+      "export_format_prefix": "Export format ",
+      "include_subpages": "Include subpages",
+      "markdown_csv": "Markdown & CSV",
+      "page_expander": "home-tab.{section}.page-row.expand",
+      "page_keyboard_dismiss": "mab.dismissKeyboard",
+      "accounts": "Accounts",
+      "new_workspace": "New workspace",
+      "add_account": "Add an account",
+      "logout_all": "Log out all",
+      "database_filter_sort": "Filter and Sort",
+      "database_view_settings": "Edit view layout, grouping and more..."
+    },
+    "list_parsing": {
+      "page_titles": {
+        "row": {
+          "class": "android.widget.TextView"
+        },
+        "fields": {
+          "title": {
+            "attribute": "text"
+          }
+        },
+        "required": [
+          "title"
+        ]
+      }
+    },
+    "page_boundary_repeats": 3,
+    "page_max_windows": 1000,
+    "board_alignment_attempts": 4,
+    "board_alignment_distance_ratio": 0.2,
+    "board_boundary_repeats": 2,
+    "page_scroll_ratio": 0.3
+  }
+}

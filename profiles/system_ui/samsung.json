@@ -73,6 +73,56 @@
       "enable_command": "cmd bluetooth_manager enable",
       "disable_command": "cmd bluetooth_manager disable",
       "paired_devices_command": "dumpsys bluetooth_manager",
+      "pairing": {
+        "direct_intents": [
+          "am start -a android.settings.BLUETOOTH_SETTINGS",
+          "am start -a android.settings.BLUETOOTH_PAIRING_SETTINGS"
+        ],
+        "owner_packages": ["com.android.settings"],
+        "page_labels": ["Bluetooth", "Available devices", "Paired devices", "블루투스", "연결 가능한 디바이스", "등록된 디바이스"],
+        "device_resource_ids": ["android:id/title"],
+        "confirmation": {
+          "dialog_resource_ids": ["android:id/parentPanel", "com.android.settings:id/parentPanel"],
+          "button_resource_ids": ["android:id/button1", "com.android.settings:id/button1"],
+          "button_labels": ["Pair", "페어링", "연결"],
+          "target_labels": ["{target}", "Pair with {target}?", "Pair with {target}", "{target} 기기와 페어링할까요?"]
+        },
+        "timeout_sec": 120
+      },
+      "unpair": {
+        "details_resource_ids": [
+          "com.android.settings:id/deviceDetails"
+        ],
+        "details_descriptions": [
+          "{target}, Device settings",
+          "{target}, 기기 설정"
+        ],
+        "header_resource_ids": [
+          "com.android.settings:id/bluetooth_header_title"
+        ],
+        "button_labels": [
+          "Unpair",
+          "등록 해제"
+        ],
+        "confirmation": {
+          "dialog_resource_ids": [
+            "android:id/parentPanel",
+            "com.android.settings:id/parentPanel"
+          ],
+          "button_resource_ids": [
+            "android:id/button1",
+            "com.android.settings:id/button1"
+          ],
+          "button_labels": [
+            "Unpair",
+            "등록 해제"
+          ],
+          "target_labels": [
+            "{target}",
+            "Unpair {target}?"
+          ]
+        }
+      },
       "ui_fallback": {
         "direct_intents": [
           "am start -a android.settings.WIRELESS_SETTINGS"
@@ -99,7 +149,10 @@
         "Bluetooth"
       ],
       "fallback": {
-        "swipe_direction": "right",
+        "swipe_direction": "left",
+        "swipe_container_resource_ids": ["com.android.intentresolver:id/sem_chooser_recycler_ranked_app", "android:id/contentPanel", "android:id/resolver_list"],
+        "swipe_direction_overrides": {"android:id/contentPanel": "up", "android:id/resolver_list": "up"},
+        "max_swipes": 4,
         "more_labels": [
           "More"
         ]
@@ -113,7 +166,14 @@
         ],
         "receiver_resource_ids": [
           "android:id/title"
-        ]
+        ],
+        "discovery": {
+          "wait_sec": 12.0,
+          "scan_wait_sec": 3.0,
+          "scan_retries": 2,
+          "stop_labels": ["Stop"],
+          "scan_labels": ["Scan", "SCAN", "Refresh", "검색", "새로고침"]
+        }
       }
     }
   }

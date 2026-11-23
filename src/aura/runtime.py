@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import ArtifactStore
-from .device import Device
+from .device import AndroidDevice, Device
 from .journal import EventJournal
 from .models import (
     AcquisitionItem,
@@ -31,13 +31,21 @@ from .models import (
 from .profiles import AppProfile, SystemUIProfile
 from .session import capture_environment
 from .system_ui import SystemUIRuntime
-from .ui import UiRuntime
+from .ui import UiRuntime, hierarchy_signature
 
 
 Collector = Callable[["RunContext"], Outcome]
 
 
+def record_snapshot(journal, observation_id, action, screen, tree):
+    """Register supplied evidence buffers; capture timing belongs to the caller."""
+    journal.append('observation_recorded', status='success',
+        context={'observation_id': observation_id}, details={'action_event_id': action.event_id})
+    return {'screen_image': screen, 'ui_tree': tree}
+
+
 def source_snapshot_references(value: Any, namespace: str) -> Any:
+    """Separate collector snapshot references from retained observation IDs."""
     if isinstance(value, Mapping):
         result = {}
         for key, child in value.items():
@@ -106,11 +114,31 @@ class RunContext:
     def target(self, target_id: str):
         return next(target for target in self.app_profile.targets if target.target_id == target_id)
 
+    def target_enabled(self, target_id: str) -> bool:
+        """Whether pre-analysis permits this target in the current environment."""
+        target = self.target(target_id)
+        environment = self.base_context.get("condition", {}).get(
+            "acquisition_environment", target.acquisition_environments[0])
+        return environment in target.acquisition_environments
+
+    def require_target_enabled(self, target_id: str) -> None:
+        if not self.target_enabled(target_id):
+            raise ValueError(f"{target_id}: acquisition environment excluded by profile")
+
+    @property
+    def excluded_targets(self) -> list[dict[str, Any]]:
+        return [{"target_id": target.target_id,
+                 "acquisition_environment": self.base_context.get("condition", {}).get("acquisition_environment"),
+                 "procedure_status": "not_attempted", "acquisition_status": None,
+                 "reason": "profile_environment_excluded"}
+                for target in self.app_profile.targets if not self.target_enabled(target.target_id)]
+
     @property
     def identifications(self) -> tuple[IdentificationRecord, ...]:
         return tuple(self._identifications.values())
 
     def begin_identification(self, target_id: str) -> None:
+        self.require_target_enabled(target_id)
         target = self.target(target_id)
         current = self._identifications[target_id]
         if current.started_at is not None:
@@ -171,6 +199,7 @@ class RunContext:
         )
         if target is None:
             raise ValueError(f"unknown acquisition target: {target_id!r}")
+        self.require_target_enabled(target_id)
         if item_type not in target.item_types:
             raise ValueError(
                 f"item type {item_type!r} is not declared by {target_id!r}"
@@ -456,6 +485,14 @@ class RunContext:
             if acquisition is not AcquisitionStatus.ACQUIRED:
                 reason = reason or "required_artifacts_missing"
 
+        if action is None and acquisition in {AcquisitionStatus.PARTIAL, AcquisitionStatus.NOT_ACQUIRED}:
+            # Record the result decision, without inventing a preceding UI action.
+            action = self.linked_action(
+                "record_acquisition_outcome", attempt_id, context=dict(current.context),
+                details={"procedure_status": procedure.value,
+                         "acquisition_status": acquisition.value, "reason": reason},
+            )
+
         finished = replace(
             current,
             procedure_status=procedure,
@@ -500,12 +537,13 @@ class RunContext:
     def start_app(self) -> bool:
         package_name = self.app_profile.package_name
         package_selector = {"packageName": package_name}
+        timeout = self.app_profile.timings.get("application_start_timeout", 60.0)
         for _ in range(2):
             self.device.app_start(package_name)
-            if not self.ui.wait_for(package_selector):
+            if not self.ui.wait_for(package_selector, timeout=timeout):
                 continue
             time.sleep(
-                self.app_profile.timings.get("application_start_settle", 0.0)
+                self.app_profile.timings["application_start_settle"]
             )
             previous = None
             stable_polls = 0
@@ -525,11 +563,12 @@ class RunContext:
                     previous = None
                     stable_polls = 0
                     return False
-                stable_polls = stable_polls + 1 if current == previous else 1
-                previous = current
+                signature = hierarchy_signature(root)
+                stable_polls = stable_polls + 1 if signature == previous else 1
+                previous = signature
                 return stable_polls >= 2
 
-            if self.ui.wait_until(settled):
+            if self.ui.wait_until(settled, timeout=timeout):
                 return True
         return False
 
@@ -794,8 +833,8 @@ class AcquisitionRuntime:
         ui = UiRuntime(
             self.device,
             journal,
-            default_timeout=app_profile.timings.get("default_timeout", 5.0),
-            poll_interval=app_profile.timings.get("poll_interval", 0.2),
+            default_timeout=app_profile.timings["default_timeout"],
+            poll_interval=app_profile.timings["poll_interval"],
         )
         context = RunContext(
             run_dir=run_dir,
@@ -825,11 +864,9 @@ class AcquisitionRuntime:
                 self.device,
                 system_ui_profile,
                 journal,
-                timeout=app_profile.timings.get("default_timeout", 5.0),
-                poll_interval=app_profile.timings.get("poll_interval", 0.2),
-                transition_settle=app_profile.timings.get(
-                    "transition_settle", 0.5
-                ),
+                timeout=app_profile.timings["default_timeout"],
+                poll_interval=app_profile.timings["poll_interval"],
+                transition_settle=app_profile.timings["transition_settle"],
             )
             if prepared_session_id is not None
             or notifications == "suppress_all"
@@ -842,12 +879,15 @@ class AcquisitionRuntime:
         failure_stage = "collector"
         outcome = None
 
+        previous_capture_journal = None
+        if isinstance(self.device, AndroidDevice):
+            previous_capture_journal = self.device.capture_journal
+            self.device.capture_journal = journal
         try:
             if system_ui is not None:
                 failure_stage = "system_ui_prepare"
                 if prepared_session_id is not None:
-                    system_ui.verify_prepared_environment(None)
-                    system_ui.apply_acquisition_environment(acquisition_environment)
+                    # The session controller owns environment transitions.
                     observed = system_ui.verify_prepared_environment(acquisition_environment)
                     base_context["verified_state"] = capture_environment(lambda: observed)
                     context.base_context["verified_state"] = base_context["verified_state"]
@@ -857,6 +897,17 @@ class AcquisitionRuntime:
                     bluetooth_snapshot = system_ui.prepare_bluetooth_delivery(
                         bluetooth_target_name
                     )
+                    if prepared_session_id is not None:
+                        previous_state = base_context["verified_state"]
+                        observed = system_ui.verify_prepared_environment(
+                            acquisition_environment, reuse_hide_all=True,
+                        )
+                        base_context["verified_state"] = {
+                            **capture_environment(lambda: observed),
+                            "reused_fields": ["hide_all"],
+                            "hide_all_observed_at": previous_state["observed_at"],
+                        }
+                        context.base_context["verified_state"] = base_context["verified_state"]
             failure_stage = "collector"
             outcome = collector(context)
             self._validate_outcome(outcome)
@@ -873,6 +924,8 @@ class AcquisitionRuntime:
                 },
             )
         finally:
+            if isinstance(self.device, AndroidDevice):
+                self.device.capture_journal = previous_capture_journal
             if bluetooth_snapshot is not None and system_ui is not None:
                 try:
                     system_ui.restore_bluetooth_delivery(bluetooth_snapshot)
@@ -1006,6 +1059,7 @@ class AcquisitionRuntime:
             },
             "items": [asdict(record) for record in context.items],
             "identifications": [asdict(record) for record in context.identifications],
+            "excluded_targets": context.excluded_targets,
             "attempts": [
                 {
                     **asdict(record),

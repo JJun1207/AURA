@@ -1,11 +1,29 @@
 {
   "name": "generic",
-  "description": "Known unverified default Android/Google Pixel-like System UI candidates. Runtime code must confirm the resulting state.",
+  "description": "Default Android/Google Pixel-like System UI candidates. Runtime code must confirm the resulting state.",
   "manufacturer_match": [
     "google",
     "generic"
   ],
   "operations": {
+    "share_sheet": {
+      "strategy": "visible_then_expand",
+      "owner_packages": ["com.android.intentresolver"],
+      "resource_ids": ["android:id/text1"],
+      "bluetooth_labels": ["Bluetooth"],
+      "fallback": {
+        "swipe_direction": "up",
+        "swipe_container_resource_ids": ["android:id/contentPanel", "android:id/resolver_list"],
+        "max_swipes": 4,
+        "more_labels": []
+      },
+      "receiver_picker": {
+        "owner_packages": ["com.android.settings"],
+        "title_labels": ["Choose Bluetooth device"],
+        "receiver_resource_ids": ["android:id/title"],
+        "discovery": {"wait_sec": 12.0}
+      }
+    },
     "dnd": {
       "strategy": "button_based",
       "direct_intents": [
@@ -76,7 +94,147 @@
       "disabled_value": "0",
       "enable_command": "cmd bluetooth_manager enable",
       "disable_command": "cmd bluetooth_manager disable",
-      "paired_devices_command": "dumpsys bluetooth_manager"
+      "paired_devices_command": "dumpsys bluetooth_manager",
+      "pairing": {
+        "direct_intents": [
+          "am start -a android.settings.BLUETOOTH_SETTINGS",
+          "am start -a android.settings.BLUETOOTH_SETTINGS -f 0x10008000"
+        ],
+        "owner_packages": [
+          "com.android.settings"
+        ],
+        "page_labels": [
+          "Bluetooth",
+          "Connected devices",
+          "Available devices",
+          "Device name"
+        ],
+        "device_resource_ids": [
+          "android:id/title"
+        ],
+        "confirmation": {
+          "dialog_resource_ids": [
+            "android:id/parentPanel",
+            "com.android.settings:id/parentPanel"
+          ],
+          "button_resource_ids": [
+            "android:id/button1",
+            "com.android.settings:id/button1"
+          ],
+          "button_labels": [
+            "OK",
+            "Pair",
+            "Connect",
+            "Allow",
+            "Yes",
+            "Confirm"
+          ],
+          "target_labels": [
+            "{target}",
+            "Pair with {target}?",
+            "Pair with {target}",
+            "{target} 기기와 페어링할까요?"
+          ]
+        },
+        "scan_labels": [
+          "Scan",
+          "SCAN"
+        ],
+        "timeout_sec": 120,
+        "pairing_direct_intents": [
+          "am start -a android.settings.BLUETOOTH_PAIRING_SETTINGS",
+          "am start -a android.settings.BLUETOOTH_PAIRING_SETTINGS -f 0x10008000"
+        ],
+        "pairing_page_labels": [
+          "Available devices",
+          "Device name"
+        ],
+        "pair_new_device_labels": [
+          "Pair new device"
+        ],
+        "page_titles_only": true
+      },
+      "unpair": {
+        "details_resource_ids": [
+          "com.android.settings:id/settings_button"
+        ],
+        "details_descriptions": [
+          "{target}, Device settings",
+          "{target}, settings"
+        ],
+        "details_by_target_row": true,
+        "header_resource_ids": [
+          "android:id/title"
+        ],
+        "header_text_only": true,
+        "button_labels": [
+          "Unpair",
+          "Forget"
+        ],
+        "scroll_to_start_swipes": 3,
+        "max_swipes": 4,
+        "scroll_duration_sec": 0.2,
+        "confirmation": {
+          "dialog_resource_ids": [
+            "android:id/parentPanel",
+            "com.android.settings:id/parentPanel"
+          ],
+          "button_resource_ids": [
+            "android:id/button1",
+            "com.android.settings:id/button1"
+          ],
+          "button_labels": [
+            "Unpair",
+            "Forget",
+            "OK"
+          ],
+          "target_labels": [
+            "{target}",
+            "Unpair {target}?",
+            "Forget {target}?",
+            "Your phone will no longer be paired with {target}."
+          ]
+        },
+        "saved_devices_all_labels": [
+          "See all"
+        ]
+      },
+      "ui_fallback": {
+        "direct_intents": [
+          "am start -a android.settings.BLUETOOTH_SETTINGS",
+          "am start -a android.settings.BLUETOOTH_SETTINGS -f 0x10008000"
+        ],
+        "row_labels": [
+          "Bluetooth"
+        ],
+        "page_labels": [
+          "Bluetooth"
+        ],
+        "owner_packages": [
+          "com.android.settings"
+        ],
+        "switch_resource_ids": [
+          "com.android.settings:id/switch_widget",
+          "android:id/switch_widget"
+        ],
+        "page_titles_only": true
+      },
+      "settings_navigation": {
+        "direct_intents": [
+          "am start -a android.settings.SETTINGS",
+          "am start -a android.settings.SETTINGS -f 0x10008000"
+        ],
+        "steps": [
+          [
+            "Connections",
+            "Connection",
+            "Connected devices"
+          ],
+          [
+            "Bluetooth"
+          ]
+        ]
+      }
     }
   }
 }

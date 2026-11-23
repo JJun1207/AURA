@@ -1,16 +1,26 @@
 """WhatsApp single-chat UI Materialize collector."""
 
 from __future__ import annotations
+from ...collection import (
+    overlap_candidates,
+    unique_overlap_anchor,
+    reconcile_overlap,
+    stability_probe,
+    poll_samples,
+)
+from ...artifacts import select_inventory_file, parse_inventory, nul_inventory_command as _inventory_command
+from ...parsing import contains_bounds as _contains
+
+
 
 import json
-import shlex
 import tempfile
-import time
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
+from ...ui import hierarchy_signature
 
 from ...models import (
     AcquisitionStatus,
@@ -55,13 +65,7 @@ def _one_text(
     return matches[0].get("text", "").strip() or None
 
 
-def _contains(outer, inner) -> bool:
-    return (
-        outer[0] <= inner[0]
-        and outer[1] <= inner[1]
-        and outer[2] >= inner[2]
-        and outer[3] >= inner[3]
-    )
+
 
 
 def parse_message_window(hierarchy: str, profile) -> list[dict[str, Any]]:
@@ -80,6 +84,7 @@ def parse_message_window(hierarchy: str, profile) -> list[dict[str, Any]]:
         )
     viewport = _bounds(lists[0])
     messages = []
+    marker = None
     for row in lists[0]:
         row_bounds = _bounds(row)
         geometrically_full = (
@@ -87,7 +92,7 @@ def parse_message_window(hierarchy: str, profile) -> list[dict[str, Any]]:
             and viewport[1] < row_bounds[1]
             and row_bounds[3] < viewport[3]
         )
-        marker = _one_text(row, profile, "whatsapp.date-divider")
+        marker = _one_text(row, profile, "whatsapp.date-divider") or marker
         displayed_time = _one_text(
             row, profile, "whatsapp.message-time"
         )
@@ -207,14 +212,25 @@ def _same_message(
     older: dict[str, Any],
     newer: dict[str, Any],
 ) -> bool:
+    if (older.get("date_marker") and newer.get("date_marker")
+            and older["date_marker"] != newer["date_marker"]):
+        return False
     if _message_key(older) == _message_key(newer):
         return True
     if (
         older.get("kind") != newer.get("kind")
         or older.get("body") != newer.get("body")
-        or older.get("attachment") != newer.get("attachment")
     ):
         return False
+    if older.get("attachment") != newer.get("attachment"):
+        left, right = older.get("attachment") or {}, newer.get("attachment") or {}
+        optional = {"displayed_size", "displayed_type"}
+        if (older.get("kind") != "document"
+                or "clipped" not in {older.get("viewport_visibility"), newer.get("viewport_visibility")}
+                or {k: v for k, v in left.items() if k not in optional}
+                != {k: v for k, v in right.items() if k not in optional}
+                or any(left.get(k) and right.get(k) and left[k] != right[k] for k in optional)):
+            return False
     older_time = older.get("displayed_time")
     newer_time = newer.get("displayed_time")
     if older_time and newer_time and older_time != newer_time:
@@ -227,95 +243,52 @@ def _same_message(
     }
 
 
-def _overlap_size(
-    older: list[dict[str, Any]],
-    collected: list[dict[str, Any]],
-) -> int:
-    for size in range(min(len(older), len(collected)), 0, -1):
-        if all(
-            _same_message(left, right)
-            for left, right in zip(
-                older[-size:], collected[:size], strict=True
-            )
-        ):
-            return size
+def _overlap_size(older: list[dict[str, Any]], collected: list[dict[str, Any]]) -> int:
+    for size in reversed(overlap_candidates(older, collected, same=_same_message)):
+        pairs = zip(older[-size:], collected[:size], strict=True)
+        if (any(left.get('attachment') != right.get('attachment') for left, right in pairs)
+                and not unique_overlap_anchor(older, collected, size, same=_same_message)):
+            continue  # Keep ambiguous document occurrences separately.
+        return size
     return 0
 
 
-def merge_older_messages(
-    older: list[dict[str, Any]],
-    collected: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    overlap = _overlap_size(older, collected)
-    resolved = [dict(row) for row in collected]
-    for index in range(overlap):
-        older_row = older[len(older) - overlap + index]
-        if (
-            older_row.get("viewport_visibility") == "full"
-            and resolved[index].get("viewport_visibility") == "clipped"
-        ):
-            newer_marker = resolved[index].get("date_marker")
-            resolved[index] = dict(older_row)
-            if newer_marker and not resolved[index].get("date_marker"):
-                resolved[index]["date_marker"] = newer_marker
-            continue
-        marker = older_row.get("date_marker")
-        if marker and not resolved[index].get("date_marker"):
-            resolved[index]["date_marker"] = marker
-        if (
-            older_row.get("materialization")
-            and not resolved[index].get("materialization")
-        ):
-            resolved[index]["attachment_ref"] = older_row.get(
-                "attachment_ref"
-            )
-            resolved[index]["materialization"] = older_row[
-                "materialization"
-            ]
-    return [*older[: len(older) - overlap], *resolved]
+def merge_older_messages(older: list[dict[str, Any]], collected: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def reconcile(older_row, current):
+        if older_row.get('viewport_visibility') == 'full' and current.get('viewport_visibility') == 'clipped':
+            newer_marker = current.get('date_marker')
+            current = dict(older_row)
+            if newer_marker and not current.get('date_marker'):
+                current['date_marker'] = newer_marker
+            return current
+        marker = older_row.get('date_marker')
+        if marker and not current.get('date_marker'):
+            current['date_marker'] = marker
+        if older_row.get('kind') == 'document':
+            attachment = dict(current.get('attachment') or {})
+            attachment.update({key: value for key, value in (older_row.get('attachment') or {}).items()
+                               if value and not attachment.get(key)})
+            current['attachment'] = attachment
+        if older_row.get('materialization') and not current.get('materialization'):
+            current['attachment_ref'] = older_row.get('attachment_ref')
+            current['materialization'] = older_row['materialization']
+        return current
+    return reconcile_overlap(older, collected, _overlap_size(older, collected), reconcile, copy_newer=dict)
 
 
-def select_materialized_file(
-    baseline: tuple[tuple[str, int, int], ...],
-    current: tuple[tuple[str, int, int], ...],
-    *,
-    kind: str,
-) -> tuple[str, int, int, str]:
-    if kind not in {"photo", "video"}:
-        raise WhatsAppMaterializeError(
-            "whatsapp_attachment_kind_invalid"
-        )
-    before = {path: (size, mtime) for path, size, mtime in baseline}
-    candidates = []
-    for path, size, mtime in current:
-        name = PurePosixPath(path).name
-        allowed = (
-            not name.startswith(".")
-            and PurePosixPath(name).suffix.casefold()
-            in _EXTENSIONS[kind]
-        )
-        if allowed:
-            candidates.append((path, size, mtime))
-    changed = [
-        row
-        for row in candidates
-        if before.get(row[0]) != row[1:]
-    ]
-    if len(changed) == 1:
-        return (*changed[0], "changed_media_file")
-    if len(changed) > 1 or len(candidates) > 1:
-        raise WhatsAppMaterializeError(
-            "whatsapp_attachment_file_ambiguous",
-            "materialized file is ambiguous",
-        )
-    if not candidates:
-        raise WhatsAppMaterializeError(
-            "whatsapp_attachment_file_unavailable"
-        )
-    return (
-        *candidates[0],
-        "unique_existing_media_candidate",
-    )
+def select_materialized_file(baseline, current, *, kind: str):
+    if kind not in {'photo', 'video'}:
+        raise WhatsAppMaterializeError('whatsapp_attachment_kind_invalid')
+    def matches(row):
+        name = PurePosixPath(row[0]).name
+        return not name.startswith('.') and PurePosixPath(name).suffix.casefold() in _EXTENSIONS[kind]
+    try:
+        selected, _ = select_inventory_file(baseline, current, matches=matches)
+    except ValueError as error:
+        if str(error) == 'ambiguous':
+            raise WhatsAppMaterializeError('whatsapp_attachment_file_ambiguous', 'materialized file is ambiguous') from None
+        raise WhatsAppMaterializeError('whatsapp_attachment_file_unavailable') from None
+    return (*selected, 'changed_media_file')
 
 
 def _chat_state(root: ET.Element, profile, display_name: str) -> bool:
@@ -363,99 +336,28 @@ def _profile_roots(context, kind: str):
     return roots, probes, interval
 
 
-def _inventory_command(roots: tuple[PurePosixPath, ...]) -> str:
-    values = " ".join(
-        shlex.quote(root.as_posix()) for root in roots
-    )
-    emit = (
-        'for file do printf "%s\\000%s\\000%s\\000" "$file" '
-        '"$(stat -c %s "$file")" "$(stat -c %Y "$file")"; done'
-    )
-    return (
-        f"for root in {values}; do "
-        '[ ! -d "$root" ] || find "$root" -mindepth 1 -type f '
-        f"-exec sh -c {shlex.quote(emit)} sh {{}} +; done"
-    )
+
 
 
 def _scan_files(context, roots):
-    fields = context.device.shell(
-        _inventory_command(roots)
-    ).split("\0")
-    if fields[-1:] != [""]:
-        raise WhatsAppMaterializeError(
-            "whatsapp_attachment_inventory_invalid"
-        )
-    fields.pop()
-    if len(fields) % 3:
-        raise WhatsAppMaterializeError(
-            "whatsapp_attachment_inventory_invalid"
-        )
-    records = []
-    for index in range(0, len(fields), 3):
-        remote, size_raw, mtime_raw = fields[index:index + 3]
-        path = PurePosixPath(remote)
-        try:
-            size, mtime = int(size_raw), int(mtime_raw)
-        except ValueError:
-            raise WhatsAppMaterializeError(
-                "whatsapp_attachment_inventory_invalid"
-            ) from None
-        if (
-            not path.is_absolute()
-            or ".." in path.parts
-            or not any(path.is_relative_to(root) for root in roots)
-            or size < 0
-            or mtime < 0
-        ):
-            raise WhatsAppMaterializeError(
-                "whatsapp_attachment_inventory_invalid"
-            )
-        records.append((path.as_posix(), size, mtime))
-    if len({row[0] for row in records}) != len(records):
-        raise WhatsAppMaterializeError(
-            "whatsapp_attachment_inventory_invalid"
-        )
-    return tuple(sorted(records))
+    output = context.device.shell(_inventory_command(roots))
+    try:
+        return parse_inventory(output, roots, format='nul_triples')
+    except ValueError:
+        raise WhatsAppMaterializeError('whatsapp_attachment_inventory_invalid') from None
 
 
-def _await_materialized_file(
-    context,
-    roots,
-    baseline,
-    *,
-    kind,
-):
+def _await_materialized_file(context, roots, baseline, *, kind):
     _, probes, interval = _profile_roots(context, kind)
-    previous = None
-    last_error = None
-    current = baseline
-    for probe in range(probes):
-        if probe:
-            time.sleep(interval)
-        current = _scan_files(context, roots)
-        try:
-            selected = select_materialized_file(
-                baseline,
-                current,
-                kind=kind,
-            )
-        except WhatsAppMaterializeError as error:
-            last_error = error
-            continue
-        if (
-            selected[-1].startswith(
-                ("unique_existing", "already_available")
-            )
-            or selected == previous
-        ):
-            return selected, current
-        previous = selected
-    if last_error is not None:
-        raise last_error
-    raise WhatsAppMaterializeError(
-        "whatsapp_attachment_file_did_not_settle"
-    )
+    probe, state = stability_probe(lambda: _scan_files(context, roots),
+        key=lambda current: select_materialized_file(baseline, current, kind=kind),
+        retry_errors=(WhatsAppMaterializeError,), reset_on_error=False)
+    for ready in poll_samples(probe, probes=probes, interval=interval):
+        if ready:
+            return state['key'], state['value']
+    if state['error'] is not None:
+        raise state['error']
+    raise WhatsAppMaterializeError('whatsapp_attachment_file_did_not_settle')
 
 
 def _media_view_state(root: ET.Element, profile):
@@ -483,6 +385,14 @@ def _media_save_state(root: ET.Element, profile):
             "whatsapp_media_save_unavailable"
         )
     return state
+
+
+def _reveal_media_controls(context, name, bounds, linked):
+    if linked["attachment_kind"] == "video":
+        # A tap can expose only Play/Pause while Save stays hidden.
+        return context.ui.swipe(name, "down", duration=0.15,
+                                distance_ratio=0.05, context=linked)
+    return context.ui.click_bounds(name, bounds, context=linked)
 
 
 def _return_to_chat(context, target, linked):
@@ -569,10 +479,11 @@ def _materialize_attachment(
                 "whatsapp_media_save_unavailable",
                 action=open_action,
             )
-        menu_action = context.ui.click_bounds(
+        menu_action = _reveal_media_controls(
+            context,
             "reveal_whatsapp_media_controls",
             control_bounds,
-            context=attachment_context,
+            attachment_context,
         )
         viewer_root, viewer_hierarchy, controls = _settled_root(
             context,
@@ -593,10 +504,30 @@ def _materialize_attachment(
         menu_action,
         attachment_context,
     )
+    # Capturing evidence can outlast the viewer toolbar. Never click bounds
+    # resolved before that capture; re-read XML, then act without another capture.
+    try:
+        controls = _media_view_state(ET.fromstring(context.device.hierarchy()), context.app_profile)
+    except (ET.ParseError, TypeError, WhatsAppCollectorError):
+        _, _, controls = _settled_root(
+            context, lambda root: _media_view_state(root, context.app_profile),
+            "whatsapp_media_viewer_unavailable")
+    save_bounds, control_bounds = controls
+    if save_bounds is None:
+        if control_bounds is None:
+            raise WhatsAppMaterializeError("whatsapp_media_save_unavailable", action=menu_action)
+        _reveal_media_controls(
+            context,
+            "reveal_whatsapp_media_controls_before_save", control_bounds,
+            attachment_context)
+        _, _, controls = _settled_root(
+            context, lambda root: _media_save_state(root, context.app_profile),
+            "whatsapp_media_save_unavailable")
+        save_bounds = controls[0]
     save_action = context.ui.click_bounds(
         "save_whatsapp_media",
         save_bounds,
-        context=attachment_context,
+        context={**attachment_context, "save_revalidated_after_evidence": True},
     )
     selected, inventory = _await_materialized_file(
         context,
@@ -863,8 +794,11 @@ def _enter_chat(context, target: Mapping[str, str]):
     return action, root, hierarchy
 
 
-def _window_signature(hierarchy: str) -> str:
-    return sha256(hierarchy.encode("utf-8")).hexdigest()
+def _window_signature(hierarchy: str, profile) -> tuple:
+    # Keep newly exposed rows/attachment controls significant, not their exact positions.
+    visibility = tuple((row["viewport_visibility"], row["action_bounds"] is not None)
+                       for row in parse_message_window(hierarchy, profile))
+    return hierarchy_signature(hierarchy), visibility
 
 
 def _write_bytes(
@@ -877,11 +811,7 @@ def _write_bytes(
     linked: Mapping[str, Any],
     document: Mapping[str, object] | None = None,
 ):
-    attempt_id = (
-        context.item_attempt("whatsapp:list-summary", "whatsapp.conversations", "conversation_collection", context=dict(linked), retention=True)
-        if document and document.get("record_kind") in {"whatsapp_active_chat_traversal", "whatsapp_active_chat_export_traversal"}
-        else acquisition_item_attempt(context, linked, document=document)
-    )
+    attempt_id = acquisition_item_attempt(context, linked, document=document)
     retained = retention_action(context, attempt_id, action, linked)
     return context.artifacts.write_bytes(
         f"{prefix}/{relative}",
@@ -961,12 +891,14 @@ def _retain_observation(
     hierarchy: str,
     action,
     linked: Mapping[str, Any],
+    *,
+    screen: bytes | None = None,
 ):
     attempt_id = acquisition_item_attempt(context, linked)
     retained = retention_action(context, attempt_id, action, linked)
     screen, tree = context.retain_observation(
         f"{prefix}/{stem}",
-        context.device.screenshot(),
+        context.device.screenshot() if screen is None else screen,
         hierarchy.encode("utf-8"),
         attempt_id=attempt_id,
         action=retained,
@@ -989,7 +921,7 @@ def _move_to_latest(context, target, root, hierarchy):
         root, context.app_profile, "whatsapp.scroll-bottom"
     )
     if len(shortcuts) == 1:
-        before = _window_signature(hierarchy)
+        before = _window_signature(hierarchy, context.app_profile)
         shortcut_action = context.ui.click_bounds(
             "whatsapp_go_to_most_recent_message",
             _bounds(shortcuts[0]),
@@ -1004,7 +936,7 @@ def _move_to_latest(context, target, root, hierarchy):
             ),
             "whatsapp_chat_screen_unavailable",
         )
-        moved = _window_signature(next_hierarchy) != before
+        moved = _window_signature(next_hierarchy, context.app_profile) != before
         context.journal.record_action(
             "verify_whatsapp_latest_shortcut",
             status="success",
@@ -1018,7 +950,7 @@ def _move_to_latest(context, target, root, hierarchy):
             root, hierarchy = next_root, next_hierarchy
     seen = set()
     while True:
-        signature = _window_signature(hierarchy)
+        signature = _window_signature(hierarchy, context.app_profile)
         if signature in seen:
             raise WhatsAppMaterializeError(
                 "whatsapp_latest_boundary_cycle"
@@ -1038,7 +970,7 @@ def _move_to_latest(context, target, root, hierarchy):
             ),
             "whatsapp_chat_screen_unavailable",
         )
-        if _window_signature(next_hierarchy) == signature:
+        if _window_signature(next_hierarchy, context.app_profile) == signature:
             return action, root, hierarchy
         root, hierarchy = next_root, next_hierarchy
 
@@ -1054,18 +986,19 @@ def _date_value(value: str | None, today: date) -> date | None:
         return today - timedelta(days=1)
     for pattern in ("%d %B %Y", "%d %b %Y", "%d %B", "%d %b"):
         try:
-            parsed = datetime.strptime(normalized, pattern)
+            parsed = datetime.strptime(normalized, pattern) if "%Y" in pattern else datetime.strptime(
+                f"{normalized} {today.year}", f"{pattern} %Y"
+            )
         except ValueError:
             continue
-        return parsed.date().replace(
-            year=parsed.year if "%Y" in pattern else today.year
-        )
+        return parsed.date()
     return None
 
 
 def _timestamp(
     date_value: date | None,
     displayed_time: str | None,
+    timezone,
 ) -> str | None:
     if date_value is None or displayed_time is None:
         return None
@@ -1076,19 +1009,21 @@ def _timestamp(
         except ValueError:
             continue
         return datetime.combine(
-            date_value, parsed.time()
+            date_value, parsed.time(), tzinfo=timezone
         ).isoformat(timespec="seconds")
     return None
 
 
-def _finalize_messages(messages: list[dict[str, Any]]):
+def _finalize_messages(messages: list[dict[str, Any]], device_anchor: datetime | None):
     current_date = None
-    today = date.today()
+    if device_anchor is not None and device_anchor.utcoffset() is None:
+        device_anchor = None
     result = []
     for index, message in enumerate(messages, 1):
-        marker_date = _date_value(message.get("date_marker"), today)
-        if marker_date is not None:
-            current_date = marker_date
+        marker = message.get("date_marker")
+        if marker:
+            # An unreadable divider breaks the previous date's scope.
+            current_date = _date_value(marker, device_anchor.date()) if device_anchor else None
         record = {
             key: value
             for key, value in message.items()
@@ -1099,7 +1034,8 @@ def _finalize_messages(messages: list[dict[str, Any]]):
             "record_kind": "whatsapp_message",
             "message_ref": f"message-{index:06d}",
             "timestamp_local": _timestamp(
-                current_date, message.get("displayed_time")
+                current_date, message.get("displayed_time"),
+                device_anchor.tzinfo if device_anchor else None,
             ),
         })
         result.append(record)
@@ -1165,16 +1101,30 @@ def collect_materialize(
         )
     else:
         _, root, hierarchy = _enter_chat(context, target)
+    try:
+        device_anchor = datetime.strptime(
+            context.device.shell("date +%Y-%m-%dT%H:%M:%S%z").strip(),
+            "%Y-%m-%dT%H:%M:%S%z",
+        )
+    except Exception as error:
+        device_anchor = None
+        context.journal.record_action("read_whatsapp_device_time", status="failed", context=linked,
+            details={"error": type(error).__name__})
+    else:
+        context.journal.record_action("read_whatsapp_device_time", status="success", context=linked,
+            details={"device_temporal_anchor": device_anchor.isoformat(timespec="seconds")})
     latest_action, root, hierarchy = _move_to_latest(
         context, target, root, hierarchy
     )
-    _retain_observation(
+    latest_screen = context.device.screenshot()
+    latest_source = _retain_observation(
         context,
         prefix,
         "observations/latest-boundary",
         hierarchy,
         latest_action,
         linked,
+        screen=latest_screen,
     )
 
     collected: list[dict[str, Any]] = []
@@ -1182,7 +1132,7 @@ def collect_materialize(
     seen = set()
     window_count = 0
     while True:
-        signature = _window_signature(hierarchy)
+        signature = _window_signature(hierarchy, context.app_profile)
         if signature in seen:
             raise WhatsAppMaterializeError(
                 "whatsapp_history_cycle"
@@ -1200,7 +1150,10 @@ def collect_materialize(
             f"message-windows/message-window-{window_count:06d}",
             hierarchy,
             action,
-            {**linked, "window_index": window_count},
+            {**linked, "window_index": window_count,
+             **({"source_observation_id": latest_source["observation_id"], "capture_reused": True}
+                if window_count == 1 else {})},
+            screen=latest_screen if window_count == 1 else None,
         )
         rows = parse_message_window(
             hierarchy, context.app_profile
@@ -1243,7 +1196,7 @@ def collect_materialize(
             ),
             "whatsapp_chat_screen_unavailable",
         )
-        if _window_signature(next_hierarchy) == signature:
+        if _window_signature(next_hierarchy, context.app_profile) == signature:
             earliest_action = swipe_action
             break
         root, hierarchy = next_root, next_hierarchy
@@ -1256,7 +1209,7 @@ def collect_materialize(
         earliest_action,
         linked,
     )
-    messages = _finalize_messages(collected)
+    messages = _finalize_messages(collected, device_anchor)
     output_action = context.journal.record_action(
         "write_whatsapp_materialize_outputs",
         status="success",
@@ -1277,6 +1230,7 @@ def collect_materialize(
             "display_name": target["display_name"],
             "target_ref": target["ref"],
             "identity_basis": identity_basis,
+            "device_temporal_anchor": device_anchor.isoformat(timespec="seconds") if device_anchor else None,
         },
         output_action,
         linked,

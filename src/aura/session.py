@@ -22,6 +22,7 @@ class EnvironmentSnapshot:
     airplane_enabled: bool
     wifi_enabled: bool
     wifi_connected: bool = False
+    wifi_network: dict[str, Any] | None = None
 
 
 def capture_environment(
@@ -69,6 +70,12 @@ class DeviceSession:
     applied_at: str | None = None
     finalized_at: str | None = None
     error: str | None = None
+    authorization: dict[str, Any] | None = None
+    configuration: dict[str, Any] | None = None
+    automation: dict[str, Any] | None = None
+    network_control: dict[str, Any] | None = None
+    notification_restoration: dict[str, Any] | None = None
+    wifi_restoration: dict[str, Any] | None = None
 
     def with_status(self, status: str, **changes: Any) -> DeviceSession:
         return replace(self, status=status, **changes)
@@ -161,6 +168,7 @@ class SessionStore:
                 wifi_connected=cls._bool(
                     initial_value, "wifi_connected"
                 ),
+                wifi_network=cls._optional_object(initial_value, "wifi_network"),
             )
             session = DeviceSession(
                 session_id=cls._string(document, "device_session_id"),
@@ -201,6 +209,12 @@ class SessionStore:
                     document, "finalized_at"
                 ),
                 error=cls._optional_string(document, "error"),
+                authorization=cls._optional_object(document, "authorization"),
+                configuration=cls._optional_object(document, "configuration"),
+                automation=cls._optional_object(document, "automation"),
+                network_control=cls._optional_object(document, "network_control"),
+                notification_restoration=cls._optional_object(document, "notification_restoration"),
+                wifi_restoration=cls._optional_object(document, "wifi_restoration"),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise SessionError("active device session is invalid") from error

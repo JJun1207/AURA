@@ -1,9 +1,30 @@
 """Chrome UI record parsers."""
 
 from __future__ import annotations
+from ...collection import (
+    collect_record_list,
+    stability_probe,
+    ordered_candidate,
+    visit_scope,
+    field_id,
+    content_signature,
+    window_overlap as _window_overlap,
+    merge_history_windows,
+    retain_ui_observation,
+    finish_record_collection,
+    collect_record_windows,
+    ui_selector,
+    selector_conditions,
+    iter_windows,
+    walk_hierarchy,
+)
 
-import hashlib
+
+from ...parsing import (bind_parsing_contracts, parsing_spec, read_rows, read_sections,
+                       bind_row_actions, first_node, field_value)
+
 import json
+from functools import partial
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable
@@ -13,55 +34,25 @@ from ...models import (
     ActionRef,
     Outcome,
     OutcomeStatus,
-    ProcedureStatus,
 )
 from ...ui import UiTimeout
 
 
 PREFIX = "com.android.chrome:id/"
-_UI_KEYS = {
-    "resource_id": "resourceId",
-    "text": "text",
-    "content_description": "description",
-    "class_name": "className",
-}
 
 
 def merge_windows(
     collected: list[dict[str, object]],
     visible: list[dict[str, object]],
 ) -> list[dict[str, object]]:
-    overlap = min(len(collected), len(visible))
-    while overlap and collected[-overlap:] != visible[:overlap]:
-        overlap -= 1
-    return [*collected, *visible[overlap:]]
+    return merge_history_windows(collected, visible)[0]
 
 
 def merge_download_windows(
     collected: list[dict[str, object]], visible: list[dict[str, object]]
 ) -> list[dict[str, object]]:
-    # ponytail: identical adjacent occurrences use ordered overlap; retain UI
-    # windows for ambiguity review if no distinct neighbouring row is visible.
-    overlap = min(len(collected), len(visible))
-    while overlap and not all(
-        old["title"] == new["title"]
-        and all(not old[key] or not new[key] or old[key] == new[key]
-                for key in ("caption", "date_group"))
-        for old, new in zip(collected[-overlap:], visible[:overlap])
-    ):
-        overlap -= 1
-    result = [dict(row) for row in collected]
-    for index, row in enumerate(visible[:overlap], len(result) - overlap):
-        result[index].update({key: value for key, value in row.items() if value})
-    date_group = result[-1]["date_group"] if overlap else ""
-    for row in visible[overlap:]:
-        date_group = row["date_group"] or date_group
-        result.append({**row, "date_group": date_group})
-    return result
+    return merge_windows(collected, visible)
 
-
-def _id(node: ET.Element) -> str:
-    return node.get("resource-id", "").rsplit("/", 1)[-1]
 
 
 def _text(node: ET.Element) -> str:
@@ -69,28 +60,24 @@ def _text(node: ET.Element) -> str:
 
 
 def _descendant(node: ET.Element, resource_id: str) -> ET.Element | None:
-    return next((child for child in node.iter() if _id(child) == resource_id), None)
+    return first_node(node, {'resource_id': resource_id}, suffix=True, ui_fields={})
 
 
 def _value(node: ET.Element, resource_id: str) -> str:
-    child = _descendant(node, resource_id)
-    return "" if child is None else _text(child)
+    return field_value(node, resource_id, suffix=True, ui_fields={})
 
 
 def _root(xml: str) -> ET.Element:
     return ET.fromstring(xml)
 
 
-def _bookmark_title(xml: str) -> str:
+def _browser_signature(xml, package_name="com.android.chrome"):
+    return content_signature(xml, package_name)
+
+
+def _bookmark_title(xml: str, profile) -> str:
     root = _root(xml)
-    action_bar = next(
-        (
-            node
-            for node in root.iter()
-            if _id(node) == "action_bar"
-        ),
-        None,
-    )
+    action_bar = first_node(root, {'resource_id': 'action_bar'}, ui_fields=profile.parameters['ui_fields'], suffix=True)
     if action_bar is None:
         return ""
     return next(
@@ -103,38 +90,71 @@ def _bookmark_title(xml: str) -> str:
     )
 
 
-def wait_for_bookmark_title(
-    context, current: str, *, expected: str | None = None
-) -> None:
-    def transitioned() -> bool:
+def wait_for_bookmark_title(context, current: str, *, expected: str | None = None, previous_xml: str | None = None) -> str:
+    time.sleep(context.app_profile.timings['transition_settle'])
+    previous_content = (_bookmark_content(parse_bookmarks(previous_xml, folder_path=(), profile=context.app_profile))
+                        if previous_xml is not None else None)
+    def read():
         try:
-            title = _bookmark_title(context.device.hierarchy())
+            hierarchy = context.device.hierarchy()
+            return hierarchy, _bookmark_title(hierarchy, profile=context.app_profile)
         except ET.ParseError:
-            return False
-        return title == expected if expected is not None else bool(title and title != current)
-
+            return None
+    def key(value):
+        if value is None:
+            return None
+        hierarchy, title = value
+        title_matches = title == expected if expected is not None else bool(title)
+        content = _bookmark_content(parse_bookmarks(hierarchy, folder_path=(), profile=context.app_profile))
+        content_changed = previous_content is not None and content != previous_content
+        if not title_matches or not (title != current or content_changed):
+            return None
+        return json.dumps([title, content], sort_keys=True)
+    transitioned, state = stability_probe(read, key=key)
     if not context.ui.wait_until(transitioned):
-        raise RuntimeError("Chrome bookmark transition did not complete")
+        raise RuntimeError('Chrome bookmark transition did not complete')
+    return state['value'][0]
 
 
-def _bookmark_root_visible(xml: str) -> bool:
+def _bookmark_back_visible(root, profile):
+    toolbar = first_node(root, {'resource_id': 'action_bar'}, ui_fields=profile.parameters['ui_fields'], suffix=True)
+    entry = profile.selectors['chrome.bookmarks.go-back']
+    spec = entry['selector']
+    attributes = selector_conditions({spec['kind']: spec['value'], **entry.get('constraints', {})}, backend='xml')
+    return toolbar is not None and first_node(toolbar, attributes, ui_fields={}) is not None
+
+
+def _bookmark_root_visible(xml: str, profile) -> bool:
     root = _root(xml)
-    recycler = next(
-        (node for node in root.iter() if _id(node) == "selectable_list_recycler_view"),
-        None,
-    )
-    return recycler is not None and any(
-        child.get("clickable") != "true" and _value(child, "title")
+    recycler = first_node(root, {'resource_id': 'selectable_list_recycler_view'}, ui_fields=profile.parameters['ui_fields'], suffix=True)
+    return recycler is not None and not _bookmark_back_visible(root, profile) and any(
+        child.get("clickable") != "true" and _value(child, field_id(profile, "title"))
         for child in recycler
     )
 
 
-def _return_to_bookmark_root(context, action: ActionRef) -> ActionRef:
+def _return_to_bookmark_root(context, action: ActionRef) -> tuple[ActionRef, str]:
+    rewinding = False
+    seen = set()
+    hierarchy = context.device.hierarchy()
     while True:
-        hierarchy = context.device.hierarchy()
-        if _bookmark_root_visible(hierarchy):
-            return action
-        current = _bookmark_title(hierarchy)
+        if _bookmark_root_visible(hierarchy, profile=context.app_profile) and not rewinding:
+            return action, hierarchy
+        toolbar = _descendant(_root(hierarchy), field_id(context.app_profile, "action_bar"))
+        create = _descendant(toolbar, field_id(context.app_profile, "create_new_folder_menu_id")) if toolbar is not None else None
+        if (create is not None and create.get("enabled") == "false"
+                and not _bookmark_back_visible(_root(hierarchy), context.app_profile)):
+            # Root can reopen at its remembered scroll offset with no section header.
+            rewinding = True
+            signature = _bookmark_signature(hierarchy, profile=context.app_profile)
+            if signature in seen:
+                return action, hierarchy
+            seen.add(signature)
+            action = context.ui.swipe("rewind_chrome_bookmark_root", "down", context={"surface": "bookmarks"})
+            time.sleep(context.app_profile.timings["transition_settle"])
+            hierarchy = context.device.hierarchy()
+            continue
+        current = _bookmark_title(hierarchy, profile=context.app_profile)
         if not current:
             raise RuntimeError("Chrome bookmark location is unavailable")
         action = context.ui.click(
@@ -142,336 +162,171 @@ def _return_to_bookmark_root(context, action: ActionRef) -> ActionRef:
             _selector(context, "chrome.bookmarks.go-back"),
             context={"surface": "bookmarks"},
         )
-        wait_for_bookmark_title(context, current)
+        hierarchy = wait_for_bookmark_title(context, current, previous_xml=hierarchy)
 
 
-def _selector(context, name: str) -> dict[str, object]:
+def _selector(context, name):
     try:
-        entry = context.app_profile.selectors[name]
-        spec = entry["selector"]
-        selector = {
-            _UI_KEYS[spec["kind"]]: spec["value"],
-            "packageName": spec["owner_package"],
-        }
-        selector.update(
-            {
-                _UI_KEYS[key]: value
-                for key, value in entry.get("constraints", {}).items()
-            }
-        )
-        return selector
+        return ui_selector(context.app_profile, name)
     except (KeyError, TypeError):
         raise RuntimeError(f"invalid Chrome selector: {name}") from None
 
 
-def parse_history(xml: str) -> list[dict[str, str]]:
-    records = []
-    date_group = ""
-    for node in _root(xml).iter():
-        if (
-            node.get("class") == "android.widget.TextView"
-            and not node.get("resource-id")
-            and _text(node)
-        ):
-            date_group = _text(node)
-        if node.get("clickable") != "true":
-            continue
-        title = _value(node, "title")
-        address = _value(node, "description")
-        if title and address:
-            records.append(
-                {
-                    "date_group": date_group,
-                    "title": title,
-                    "displayed_address": address,
-                }
-            )
-    return records
+def _parsed_rows(xml, view, profile):
+    return read_rows(_root(xml), parsing_spec(profile, view), ui_fields=profile.parameters['ui_fields'], suffix=True)
 
 
-def parse_downloads(xml: str) -> list[dict[str, str]]:
-    records = []
-    date_group = ""
-    for node in _root(xml).iter():
-        if _id(node) == "date" and _text(node):
-            date_group = _text(node)
-        if node.get("clickable") != "true":
-            continue
-        title = _value(node, "title")
-        caption = _value(node, "caption")
-        thumbnail = _descendant(node, "thumbnail")
-        if not title and thumbnail is not None:
-            title = thumbnail.get("content-desc", "").strip()
-        if title:
-            records.append(
-                {"date_group": date_group, "title": title, "caption": caption}
-            )
-    return records
+def _parsed_bookmark_rows(xml, folder_path, *, root_section="", profile):
+    root = _root(xml)
+    path = list(folder_path)
+    spec = parsing_spec(profile, "bookmarks")
+    sections = read_sections(root, spec, initial=root_section, ui_fields=profile.parameters['ui_fields'], suffix=True) if not path else {}
+    result = []
+    for record, node in read_rows(root, spec, ui_fields=profile.parameters['ui_fields'], suffix=True):
+        section = sections.get(node)
+        record = {"kind": record["kind"], "folder_path": [*path, *([section] if section else [])],
+                  **{key: value for key, value in record.items() if key != "kind"}}
+        result.append((record, node))
+    return result
+
+
+def parse_history(xml: str, *, profile) -> list[dict[str, str]]:
+    return [record for record, _ in _parsed_rows(xml, "history", profile)]
+
+
+def parse_downloads(xml: str, *, profile) -> list[dict[str, str]]:
+    return [record for record, _ in _parsed_rows(xml, "downloads", profile)]
 
 
 def parse_bookmarks(
-    xml: str, *, folder_path: Iterable[str]
+    xml: str, *, folder_path: Iterable[str], root_section: str = "", profile
 ) -> list[dict[str, object]]:
-    path = list(folder_path)
-    root = _root(xml)
-    sections: dict[int, str] = {}
-    recycler = next(
-        (node for node in root.iter() if _id(node) == "selectable_list_recycler_view"),
-        None,
-    )
-    if not path and recycler is not None:
-        section = ""
-        for child in recycler:
-            if child.get("clickable") == "true" and _value(child, "title"):
-                sections[id(child)] = section
-            else:
-                section = _value(child, "title") or section
-    records = []
-    for node in root.iter():
-        if node.get("clickable") != "true":
-            continue
-        title = _value(node, "title")
-        if not title:
-            continue
-        child_count_node = _descendant(node, "child_count_text")
-        bookmark = child_count_node is None
-        section = sections.get(id(node))
-        record: dict[str, object] = {
-            "kind": "bookmark" if bookmark else "folder",
-            "folder_path": [*path, *([section] if section else [])],
-            "title": title,
-        }
-        child_count = _value(node, "child_count_text")
-        if not bookmark and child_count:
-            record["child_count"] = child_count
-        records.append(record)
-    return records
+    return [record for record, _ in _parsed_bookmark_rows(
+        xml, folder_path, root_section=root_section, profile=profile)]
 
 
-def parse_recent_tabs(xml: str) -> list[dict[str, str]]:
-    records = []
-    group = ""
-    for node in _root(xml).iter():
-        if _id(node) == "recent_tabs_group_view":
-            group = _value(node, "device_label")
-        elif _id(node) == "recent_tabs_list_item_layout":
-            title = _value(node, "title_row")
-            if title:
-                records.append(
-                    {
-                        "group": group,
-                        "title": title,
-                        "domain": _value(node, "domain_row"),
-                    }
-                )
-    return records
+def parse_recent_tabs(xml: str, *, profile) -> list[dict[str, str]]:
+    return [record for record, _ in _parsed_rows(xml, "recent_tabs", profile)]
 
 
-def parse_account(xml: str) -> dict[str, str]:
-    root = _root(xml)
-    row = next(
-        (
-            node
-            for node in root.iter()
-            if _id(node) == "account_management_account_row"
-        ),
-        None,
-    )
-    if row is None:
-        return {}
-    display_name = _value(row, "title")
-    email = _value(row, "summary")
-    return {
-        key: value
-        for key, value in {"display_name": display_name, "email": email}.items()
-        if value
-    }
+def parse_account(xml: str, *, profile) -> dict[str, str]:
+    rows = _parsed_rows(xml, "account", profile)
+    return rows[0][0] if rows else {}
 
 
-def _parse_account_list(xml: str) -> list[dict[str, str]]:
-    record = parse_account(xml)
+def _parse_account_list(xml: str, *, profile) -> list[dict[str, str]]:
+    record = parse_account(xml, profile=profile)
     return [record] if record else []
 
 
 def _bookmark_rows(
-    xml: str, folder_path: tuple[str, ...]
+    xml: str, folder_path: tuple[str, ...], *, root_section: str = "", profile
 ) -> list[tuple[dict[str, object], dict[str, object] | None]]:
-    root = _root(xml)
-    records = parse_bookmarks(xml, folder_path=folder_path)
-    rows = [
-        node
-        for node in root.iter()
-        if node.get("clickable") == "true" and _value(node, "title")
-    ]
-    result = []
-    for record, row in zip(records, rows, strict=True):
-        description = row.get("content-desc", "").strip()
-        if record["kind"] == "folder" and not description:
-            raise RuntimeError("Chrome bookmark description is unavailable")
-        result.append(
-            (
-                record,
-                None
-                if record["kind"] == "bookmark"
-                else {
-                    "description": description,
-                    "packageName": "com.android.chrome",
-                },
-            )
-        )
-    return result
+    rows = _parsed_bookmark_rows(xml, folder_path, root_section=root_section, profile=profile)
+    return bind_row_actions(rows, parsing_spec(profile, "bookmarks")["action"])
 
 
-def _observe(
-    context,
-    attempt_id: str,
-    prefix: str,
-    source_action: ActionRef,
-    linked: dict[str, object],
-) -> tuple[str, ActionRef]:
-    hierarchy = context.device.hierarchy()
-    action = context.linked_action(
-        "observe_chrome_ui",
-        attempt_id,
-        source_action=source_action,
-        context=linked,
-    )
-    context.retain_observation(
-        prefix,
-        context.device.screenshot(),
-        hierarchy.encode("utf-8"),
-        attempt_id=attempt_id,
-        action=action,
-        context=linked,
-    )
-    return hierarchy, action
+def _bookmark_content(records):
+    # Chrome can recycle a folder's accessibility label onto an unrelated
+    # bookmark row. Preserve the label as evidence, but not as row identity.
+    return [{key: value for key, value in record.items() if key != "accessibility_description"}
+            for record in records]
+
+
+def _bookmark_signature(xml: str, *, profile) -> str:
+    return json.dumps([_bookmark_title(xml, profile=profile),
+                       _bookmark_content(parse_bookmarks(xml, folder_path=(), profile=profile))],
+                      sort_keys=True)
 
 
 def _open_surface(context, menu_item: str, marker: str) -> ActionRef:
     close = _selector(context, "chrome.close")
-    home = _selector(context, "chrome.home")
     menu = _selector(context, "chrome.menu")
+    settle = context.app_profile.timings["transition_settle"]
     if context.device.exists(close):
         context.ui.click("close_chrome_surface", close, expected=menu)
-    if context.device.exists(home):
-        context.ui.click("open_chrome_home", home, expected=menu)
+        time.sleep(settle)
+    elif context.device.exists(_selector(context, "chrome.screen.settings")):
+        context.ui.back("leave_chrome_settings", expected=menu)
+        time.sleep(settle)
     menu_list = _selector(context, "chrome.menu.list")
     try:
         context.ui.click("open_chrome_menu", menu, expected=menu_list)
     except UiTimeout:
-        time.sleep(context.app_profile.timings.get("transition_settle", 0.2))
+        time.sleep(context.app_profile.timings["transition_settle"])
         context.ui.click(
             "open_chrome_menu_retry", menu, expected=menu_list
         )
-    return context.ui.click(
+    time.sleep(settle)
+    action = context.ui.click(
         f"open_{menu_item.replace('.', '_')}",
         _selector(context, menu_item),
         expected=_selector(context, marker),
     )
-
-
-def _retain_records(
-    context,
-    attempt_id: str,
-    surface: str,
-    records: list[dict[str, object]],
-    source_action: ActionRef,
-) -> ActionRef:
-    linked = {"surface": surface, "record_count": len(records)}
-    action = context.linked_action(
-        "retain_chrome_records",
-        attempt_id,
-        source_action=source_action,
-        context=linked,
-    )
-    payload = {
-        "record_kind": f"chrome_{surface}",
-        "record_count": len(records),
-        "records": records,
-    }
-    context.artifacts.write_bytes(
-        f"chrome/{surface}.json",
-        (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode(),
-        kind="structured_data",
-        attempt_id=attempt_id,
-        action=action,
-        context=linked,
-    )
+    time.sleep(settle)
     return action
 
 
-def _collect_list(
-    context,
-    *,
-    surface: str,
-    target_id: str,
-    item_type: str,
-    menu_item: str,
-    marker: str,
-    parser,
-    scroll: bool = True,
-) -> tuple[int, ActionRef]:
-    context.begin_identification(target_id)
-    attempt_id = context.item_attempt(
-        f"chrome:{surface}",
-        target_id,
-        item_type,
-        source={"surface": surface},
-    )
-    records: list[dict[str, object]] = []
-    source_action = None
-    traversal_error = None
-    try:
-        source_action = _open_surface(context, menu_item, marker)
-        seen_hierarchies: set[str] = set()
-        window = 0
-        while True:
-            hierarchy = context.device.hierarchy()
-            signature = hashlib.sha256(hierarchy.encode()).hexdigest()
-            if signature in seen_hierarchies:
-                break
-            seen_hierarchies.add(signature)
-            window += 1
-            hierarchy, source_action = _observe(
-                context,
-                attempt_id,
-                f"chrome/{surface}/window-{window:04d}",
-                source_action,
-                {"surface": surface, "window": window},
-            )
-            merge = merge_download_windows if surface == "downloads" else merge_windows
-            records = merge(records, parser(hierarchy))
-            if not scroll:
-                break
-            source_action = context.ui.swipe(
-                f"scroll_chrome_{surface}",
-                "up",
-                context={"surface": surface, "window": window},
-            )
-            time.sleep(context.app_profile.timings.get("transition_settle", 0.2))
-    except (Exception, KeyboardInterrupt) as error:
-        traversal_error = error
-    action = _retain_records(
-        context, attempt_id, surface, records, source_action
-    )
-    artifact = context.artifacts.records[-1]
-    context.register_collection_records(target_id, artifact, records)
-    context.finish_identification(
-        target_id,
-        completion_condition=None if traversal_error else ("repeated_hierarchy" if scroll else "single_screen_parsed"),
-        reason=(str(traversal_error) or type(traversal_error).__name__) if traversal_error else None,
-    )
-    context.finish_attempt(
-        attempt_id,
-        ProcedureStatus.INTERRUPTED if traversal_error else ProcedureStatus.COMPLETED,
-        AcquisitionStatus.PARTIAL if traversal_error else context.result_status(attempt_id),
-        reason=(str(traversal_error) or type(traversal_error).__name__) if traversal_error else None,
-        action=action,
-        details={"record_count": len(records)},
-    )
-    if traversal_error:
-        raise traversal_error
-    return len(records), action
+def _ready_history(context, attempt_id, source_action, *, allow_empty):
+    """The empty-state view can precede loading; it alone is not completion."""
+    hierarchy = ""
+    polls = 0
+    saw_loading = False
+    empty_signature = None
+    empty = False
+    started = time.perf_counter()
+    timeout = context.app_profile.timings["history_load_timeout"]
+
+    def ready():
+        nonlocal hierarchy, polls, saw_loading, empty_signature, empty
+        hierarchy = context.device.hierarchy()
+        polls += 1
+        visible_ids = {node.get("resource-id") for node in _root(hierarchy).iter()
+                       if node.get("visible-to-user") != "false"}
+        loading = bool(visible_ids & {PREFIX + field_id(context.app_profile, name)
+                                     for name in ("loading_view", "progress_spinner")})
+        saw_loading = saw_loading or loading
+        if parse_history(hierarchy, profile=context.app_profile) and not loading:
+            return True
+        empty_candidate = (allow_empty and saw_loading and not loading
+                           and PREFIX + field_id(context.app_profile, "empty_state_text_title") in visible_ids)
+        signature = _browser_signature(hierarchy) if empty_candidate else None
+        empty = signature is not None and signature == empty_signature
+        empty_signature = signature
+        if polls == 1:
+            print("AURA: Waiting for Chrome History to load.", flush=True)
+        return empty
+
+    completed = context.ui.wait_until(ready, timeout=timeout)
+    if polls > 1 or not completed:
+        source_action = context.journal.record_action(
+            "wait_chrome_history_content", status="success" if completed else "failed",
+            attempt_id=attempt_id, context={"source_action_id": source_action.action_id},
+            details={"poll_count": polls, "timeout_seconds": timeout,
+                     "elapsed_seconds": max(0.0, time.perf_counter() - started),
+                     "loading_observed": saw_loading, "empty_after_loading": empty},
+        )
+    if not completed:
+        raise UiTimeout("chrome_history_content_not_ready")
+    return hierarchy, source_action, empty
+
+
+def _collect_list(context, *, surface: str, target_id: str, item_type: str,
+                  menu_item: str, marker: str, parser, scroll: bool = True) -> tuple[int, ActionRef]:
+    def collect(attempt_id, state):
+        def ready():
+            xml, state['action'], state['empty'] = _ready_history(
+                context, attempt_id, state['action'], allow_empty=not state['records'])
+            return xml
+        collect_record_windows(context, attempt_id, state, surface=surface, prefix=f'chrome/{surface}',
+            observe_name='observe_chrome_ui', scroll_name=f'scroll_chrome_{surface}', parser=parser,
+            settle=context.app_profile.timings['scroll_settle'],
+            overlap_error=f"chrome_{surface.replace('-', '_')}_window_overlap_unconfirmed",
+            read=ready if surface == 'history' else None, scroll=scroll)
+    return collect_record_list(context, target_id=target_id, item_key=f'chrome:{surface}', item_type=item_type,
+        surface=surface, prefix=f'chrome/{surface}', record_kind=f'chrome_{surface}', retain_name='retain_chrome_records',
+        completion='repeated_hierarchy' if scroll else 'single_screen_parsed',
+        opener=lambda: _open_surface(context, menu_item, marker), collect=collect)
 
 
 def _collect_bookmarks(context) -> tuple[int, ActionRef]:
@@ -483,103 +338,153 @@ def _collect_bookmarks(context) -> tuple[int, ActionRef]:
         "bookmark_collection",
         source={"surface": surface},
     )
-    source_action = _open_surface(
-        context, "chrome.menu.bookmarks", "chrome.screen.bookmarks"
-    )
-    source_action = _return_to_bookmark_root(context, source_action)
+    source_action = None
     records: list[dict[str, object]] = []
-    seen_records: set[tuple[str, tuple[str, ...], str]] = set()
-    visited_folders: set[tuple[str, ...]] = {()}
     window = 0
 
-    def walk(path: tuple[str, ...], action: ActionRef) -> ActionRef:
+    def level(task):
         nonlocal window
-        seen_hierarchies: set[str] = set()
-        while True:
-            hierarchy = context.device.hierarchy()
-            signature = hashlib.sha256(hierarchy.encode()).hexdigest()
-            if signature in seen_hierarchies:
-                return action
-            seen_hierarchies.add(signature)
-            parent_title = _bookmark_title(hierarchy)
+        path, action, folder_ref, initial_xml = task
+        previous = []
+        entries = []
+        entry_count = 0
+        last_xml = initial_xml
+        seen_windows = set()
+        previous_signature = None
+        repeated_navigation = 0.0
+        navigation_started = None
+        def read():
+            nonlocal initial_xml, last_xml
+            last_xml = initial_xml if initial_xml is not None else context.device.hierarchy()
+            initial_xml = None
+            return last_xml
+        def advance():
+            nonlocal action, navigation_started
+            navigation_started = time.monotonic()
+            action = context.ui.swipe(
+                "scroll_chrome_bookmarks", "up",
+                context={"folder_path": list(path), "window": window})
+            time.sleep(context.app_profile.timings["scroll_settle"])
+        def signature(xml):
+            nonlocal previous_signature, repeated_navigation
+            current = _bookmark_signature(xml, profile=context.app_profile)
+            if current != previous_signature:
+                if current in seen_windows:
+                    # Only swipe/read time counts; captures and child visits may be slow.
+                    repeated_navigation += time.monotonic() - navigation_started
+                else:
+                    seen_windows.add(current)
+                    repeated_navigation = 0.0
+            previous_signature = current
+            return current
+        for hierarchy in iter_windows(read, advance, signature, adjacent=True):
+            parent_title = _bookmark_title(hierarchy, profile=context.app_profile)
             window += 1
-            hierarchy, action = _observe(
-                context,
-                attempt_id,
-                f"chrome/bookmarks/window-{window:04d}",
-                action,
-                {"surface": surface, "folder_path": list(path), "window": window},
+            action, _ = retain_ui_observation(
+                context, attempt_id, f"chrome/bookmarks/window-{window:04d}", hierarchy,
+                name="observe_chrome_ui", source_action=action,
+                linked={"surface": surface, "folder_path": list(path), "window": window},
             )
-            for record, selector in _bookmark_rows(hierarchy, path):
-                record_path = tuple(map(str, record["folder_path"]))
-                key = (str(record["kind"]), record_path, str(record["title"]))
-                if key not in seen_records:
-                    seen_records.add(key)
-                    records.append(record)
+            rows = _bookmark_rows(hierarchy, path, profile=context.app_profile)
+            visible = [record for record, _ in rows]
+            overlap = _window_overlap(previous, visible, missing_keys=("folder_path",) if not path else ())
+            root_section = ""
+            if overlap and not path and previous[-overlap]["folder_path"]:
+                # Inherit only through confirmed overlap; a visible header overrides it.
+                root_section = previous[-overlap]["folder_path"][0]
+                rows = _bookmark_rows(hierarchy, path, root_section=root_section, profile=context.app_profile)
+                visible = [record for record, _ in rows]
+            for index, record in enumerate(visible[:overlap], entry_count - overlap):
+                entries[index].update({key: value for key, value in record.items()
+                                       if value and not entries[index].get(key)})
+            for entry_index, record in enumerate(visible[overlap:], entry_count):
+                entry = {**record, "folder_ref": folder_ref, "entry_index": entry_index}
+                entries.append(entry)
+                records.append(entry)
+            if previous and visible and not overlap:
+                raise RuntimeError("chrome_bookmark_window_overlap_unconfirmed")
+            if repeated_navigation and repeated_navigation >= context.app_profile.timings['default_timeout']:
+                raise RuntimeError('chrome_bookmark_window_cycle_unresolved')
+            current_xml = hierarchy
+            for entry_index, (record, _) in enumerate(rows[overlap:], entry_count):
                 if record["kind"] != "folder":
                     continue
-                child_path = (*record_path, str(record["title"]))
-                if child_path in visited_folders:
-                    continue
-                if selector is None:
-                    raise RuntimeError("Chrome bookmark selector is unavailable")
-                visited_folders.add(child_path)
-                action = context.ui.click(
-                    "open_chrome_bookmark_folder",
-                    selector,
-                    context={"folder_path": list(child_path)},
-                )
-                wait_for_bookmark_title(context, parent_title)
-                action = walk(child_path, action)
-                child_title = _bookmark_title(context.device.hierarchy())
-                action = context.ui.click(
-                    "return_from_chrome_bookmark_folder",
-                    _selector(context, "chrome.bookmarks.go-back"),
-                    expected=_selector(context, "chrome.screen.bookmarks"),
-                    context={"folder_path": list(path)},
-                )
-                wait_for_bookmark_title(
-                    context, child_title, expected=parent_title
-                )
-            action = context.ui.swipe(
-                "scroll_chrome_bookmarks",
-                "up",
-                context={"folder_path": list(path), "window": window},
-            )
-            time.sleep(context.app_profile.timings.get("transition_settle", 0.2))
+                child_path = (*map(str, record["folder_path"]), str(record["title"]))
+                # Returning from a child may reset the scroll position. Never reuse
+                # an ordinal selector against a different parent window.
+                def enter():
+                    nonlocal action
+                    current_rows = _bookmark_rows(current_xml, path, root_section=root_section, profile=context.app_profile)
+                    try:
+                        _, selector = ordered_candidate(
+                            rows, current_rows, entry_index - entry_count + overlap,
+                            key=lambda item: _bookmark_content([item[0]])[0])
+                    except ValueError:
+                        raise RuntimeError("chrome_bookmark_parent_window_changed") from None
+                    if selector is None:
+                        raise RuntimeError("Chrome bookmark selector is unavailable")
+                    action = context.ui.click(
+                        "open_chrome_bookmark_folder",
+                        selector,
+                        context={"folder_path": list(child_path), "folder_ref": f"{folder_ref}/{entry_index}"},
+                    )
+                    child_xml = wait_for_bookmark_title(
+                        context, parent_title, expected=str(record["title"]), previous_xml=current_xml
+                    )
+                    return child_path, action, f"{folder_ref}/{entry_index}", child_xml
+
+                def restore():
+                    nonlocal action, current_xml
+                    child_title = _bookmark_title(child_xml, profile=context.app_profile)
+                    action = context.ui.click(
+                        "return_from_chrome_bookmark_folder",
+                        _selector(context, "chrome.bookmarks.go-back"),
+                        expected=_selector(context, "chrome.screen.bookmarks"),
+                        context={"folder_path": list(path)},
+                    )
+                    current_xml = wait_for_bookmark_title(
+                        context, child_title, expected=parent_title, previous_xml=child_xml
+                    )
+                with visit_scope(enter, restore) as child_task:
+                    action, child_xml = yield child_task
+            entry_count += len(visible) - overlap
+            # Carry known metadata through a later clipped observation, including
+            # when child-folder records are interleaved in the retained output.
+            previous = [
+                {key: value for key, value in entry.items() if key not in {"folder_ref", "entry_index"}}
+                for entry in (entries[-len(visible):] if visible else [])
+            ]
+        return action, last_xml
 
     traversal_error = None
     try:
-        source_action = walk((), source_action)
+        source_action = _open_surface(
+            context, "chrome.menu.bookmarks", "chrome.screen.bookmarks"
+        )
+        source_action, root_xml = _return_to_bookmark_root(context, source_action)
+        source_action, _ = walk_hierarchy(((), source_action, "root", root_xml), level)
     except (Exception, KeyboardInterrupt) as error:
         traversal_error = error
-    action = _retain_records(
-        context, attempt_id, surface, records, source_action
+    return finish_record_collection(
+        context, attempt_id, "chrome.bookmarks", records, source_action,
+        surface=surface, prefix="chrome/bookmarks", record_kind="chrome_bookmarks",
+        retain_name="retain_chrome_records", error=traversal_error,
+        completion="recursive_bookmarks_exhausted", success_status=AcquisitionStatus.ACQUIRED,
     )
-    context.register_collection_records("chrome.bookmarks", context.artifacts.records[-1], records)
-    context.finish_identification("chrome.bookmarks", completion_condition=None if traversal_error else "recursive_bookmarks_exhausted",
-                                  reason=(str(traversal_error) or type(traversal_error).__name__) if traversal_error else None)
-    context.finish_attempt(
-        attempt_id,
-        ProcedureStatus.INTERRUPTED if traversal_error else ProcedureStatus.COMPLETED,
-        AcquisitionStatus.PARTIAL if traversal_error else AcquisitionStatus.ACQUIRED,
-        reason=(str(traversal_error) or type(traversal_error).__name__) if traversal_error else None,
-        action=action,
-        details={"record_count": len(records)},
-    )
-    if traversal_error:
-        raise traversal_error
-    return len(records), action
+
+
+def identification_contracts(profile):
+    return bind_parsing_contracts(profile, {
+        'chrome.account': ('chrome.parse_account', {'row_resource_id': 'account_management_account_row', 'fields': ['android:id/title', 'android:id/summary']}),
+        'chrome.history': ('chrome.parse_history', {'row_clickable': True, 'required_child_resource_ids': ['title', 'description'], 'date_marker': 'history_list_unlabelled_text', 'window_merge': 'longest_adjacent_ordered_record_overlap'}),
+        'chrome.downloads': ('chrome.parse_downloads', {'row_clickable': True, 'title_sources': ['title.text', 'thumbnail.content-desc'], 'optional_child_resource_ids': ['caption'], 'date_resource_id': 'date', 'window_merge': 'longest_ordered_overlap_with_missing_field_enrichment'}),
+        'chrome.bookmarks': ('chrome.parse_bookmarks', {'identity_fields': ['folder_ref', 'entry_index'], 'traverse_folders': True, 'window_merge': 'longest_adjacent_ordered_record_overlap'}),
+        'chrome.recent_tabs': ('chrome.parse_recent_tabs', {'row_resource_id': 'recent_tabs_list_item_layout', 'required_child_resource_id': 'title_row', 'group_resource_id': 'recent_tabs_group_view'}),
+    })
 
 
 def collect(context) -> Outcome:
-    context.app_profile.require_identification_rules({
-        'chrome.account': ('chrome.parse_account', {'row_resource_id': 'account_management_account_row', 'fields': ['android:id/title', 'android:id/summary']}),
-        'chrome.history': ('chrome.parse_history', {'row_clickable': True, 'required_child_resource_ids': ['title', 'description'], 'date_marker': 'unlabelled_text'}),
-        'chrome.downloads': ('chrome.parse_downloads', {'row_clickable': True, 'title_sources': ['title.text', 'thumbnail.content-desc'], 'optional_child_resource_ids': ['caption'], 'date_resource_id': 'date', 'window_merge': 'ordered_overlap_with_missing_field_enrichment'}),
-        'chrome.bookmarks': ('chrome.parse_bookmarks', {'identity_fields': ['kind', 'folder_path', 'title'], 'traverse_folders': True}),
-        'chrome.recent_tabs': ('chrome.parse_recent_tabs', {'row_resource_id': 'recent_tabs_list_item_layout', 'required_child_resource_id': 'title_row', 'group_resource_id': 'recent_tabs_group_view'}),
-    })
+    context.app_profile.require_identification_rules(identification_contracts(context.app_profile))
     condition = context.base_context.get("condition", {})
     target = condition.get("target") if isinstance(condition, dict) else None
     if (
@@ -599,7 +504,7 @@ def collect(context) -> Outcome:
         item_type="history_collection",
         menu_item="chrome.menu.history",
         marker="chrome.screen.history",
-        parser=parse_history,
+        parser=partial(parse_history, profile=context.app_profile),
     )
     counts["downloads"], action = _collect_list(
         context,
@@ -608,7 +513,7 @@ def collect(context) -> Outcome:
         item_type="download_collection",
         menu_item="chrome.menu.downloads",
         marker="chrome.screen.downloads",
-        parser=parse_downloads,
+        parser=partial(parse_downloads, profile=context.app_profile),
     )
     counts["bookmarks"], action = _collect_bookmarks(context)
     counts["recent_tabs"], action = _collect_list(
@@ -618,7 +523,7 @@ def collect(context) -> Outcome:
         item_type="recent_tab_collection",
         menu_item="chrome.menu.recent-tabs",
         marker="chrome.screen.recent-tabs",
-        parser=parse_recent_tabs,
+        parser=partial(parse_recent_tabs, profile=context.app_profile),
     )
     counts["account"], action = _collect_list(
         context,
@@ -627,11 +532,14 @@ def collect(context) -> Outcome:
         item_type="account_context",
         menu_item="chrome.menu.settings",
         marker="chrome.screen.settings",
-        parser=_parse_account_list,
+        parser=partial(_parse_account_list, profile=context.app_profile),
         scroll=False,
     )
+    incomplete_reason = next((a.reason for a in context.attempts
+                              if a.acquisition_status == AcquisitionStatus.PARTIAL), None)
     return Outcome(
-        OutcomeStatus.COMPLETE,
+        OutcomeStatus.PARTIAL if incomplete_reason else OutcomeStatus.COMPLETE,
+        reason=incomplete_reason,
         action=action,
         context={"target_ref": target["ref"]},
         details={"record_counts": counts},

@@ -1,36 +1,50 @@
 """WhatsApp 2.26.27.85 Export flow up to Bluetooth identification."""
 
 from __future__ import annotations
+from ...collection import (
+    stability_probe,
+    selector_conditions,
+    one_candidate,
+    poll_samples,
+    first_stable,
+    matching_nodes,
+)
+from ...parsing import parse_bounds
 
+from ...artifacts import changed_inventory
+
+
+import math
+import hashlib
 import re
+import sys
 import time
 import unicodedata
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping
+from datetime import datetime, timezone
+from io import BytesIO, TextIOWrapper
 from pathlib import Path
+from zipfile import BadZipFile, ZipFile
+from zlib import error as ZlibError
 
-from ...models import AcquisitionStatus, ActionRef
+from ...models import AcquisitionStatus, ActionRef, ProcedureStatus
 from ...profiles import AppProfile
+from ...ui import hierarchy_signature
 from ...windows_bluetooth import (
+    close_waiting_windows_bluetooth_receiver,
     finish_windows_bluetooth_receive,
+    normalize_bluetooth_label as _normalized_label,
     prepare_windows_bluetooth_receiver,
 )
 
 
 PACKAGE = "com.whatsapp"
-_BOUNDS = re.compile(r"^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$")
 _UNSAFE_PATH = re.compile(r"[/\\\x00-\x1f]")
-_ATTRIBUTES = {
-    "class_name": "class",
-    "content_description": "content-desc",
-    "resource_id": "resource-id",
-    "text": "text",
-    "checked": "checked",
-    "clickable": "clickable",
-    "focusable": "focusable",
-    "scrollable": "scrollable",
-    "selected": "selected",
-}
+_TRANSCRIPT_LINE = re.compile(
+    r"^\[?\d{1,4}[./-]\s?\d{1,2}[./-]\s?\d{1,4}[.,]?\s+"
+    r"[^\r\n]*?\d{1,2}:\d{2}(?::\d{2})?[^\r\n]*?(?:\]\s+| - )\S"
+)
 
 
 class WhatsAppCollectorError(RuntimeError):
@@ -40,10 +54,13 @@ class WhatsAppCollectorError(RuntimeError):
         message: str | None = None,
         *,
         action: ActionRef | None = None,
+        retryable: bool = False,
     ):
         super().__init__(message or reason_code)
         self.reason_code = reason_code
         self.action = action
+        self.retryable = retryable
+        self.retry_reason = "not_transfer_failure"
 
 
 def acquisition_item_attempt(
@@ -54,6 +71,12 @@ def acquisition_item_attempt(
 ) -> str:
     document = document or {}
     record_kind = str(document.get("record_kind", ""))
+    if record_kind in {"whatsapp_active_chat_traversal", "whatsapp_active_chat_export_traversal"}:
+        target_id = "whatsapp.export_summary" if context.base_context.get("route") == "export" else "whatsapp.conversations"
+        return context.item_attempt(
+            "whatsapp:list-summary", target_id, "conversation_collection",
+            source=dict(linked), context=dict(linked), retention=True,
+        )
     if "attachment_ref" in linked or record_kind == "whatsapp_attachment":
         kind = str(
             document.get("kind", linked.get("attachment_kind", "file"))
@@ -112,30 +135,32 @@ def _xml_value(value: object) -> str:
     )
 
 
-def _bounds(node: ET.Element) -> tuple[int, int, int, int]:
-    match = _BOUNDS.fullmatch(node.get("bounds", ""))
-    if match is None:
-        raise WhatsAppCollectorError(
-            "whatsapp_ui_bounds_invalid",
-            "UI bounds are invalid",
-        )
-    result = tuple(map(int, match.groups()))
-    if result[0] >= result[2] or result[1] >= result[3]:
-        raise WhatsAppCollectorError(
-            "whatsapp_ui_bounds_invalid",
-            "UI bounds are invalid",
-        )
-    return result
+def _bounds(node):
+    try:
+        return parse_bounds(node.get('bounds', ''), allow_negative=False)
+    except ValueError:
+        raise WhatsAppCollectorError("whatsapp_ui_bounds_invalid", "UI bounds are invalid") from None
 
 
-def _visible(node: ET.Element) -> bool:
+def _visible(node: ET.Element, root: ET.Element) -> bool:
     if node.get("visible-to-user") == "false":
         return False
     try:
         left, top, right, bottom = _bounds(node)
     except WhatsAppCollectorError:
         return False
-    return right > 0 and bottom > 0 and left < 1080 and top < 2400
+    for window in [root] if root.get("bounds") else root:
+        try:
+            viewport = _bounds(window)
+        except WhatsAppCollectorError:
+            continue
+        if (
+            window.get("visible-to-user") != "false"
+            and left < viewport[2] and top < viewport[3]
+            and right > viewport[0] and bottom > viewport[1]
+        ):
+            return True
+    return False
 
 
 def _selector_spec(
@@ -147,7 +172,7 @@ def _selector_spec(
         selector = entry["selector"]
         owner = selector["owner_package"]
         expected = {
-            _ATTRIBUTES[selector["kind"]]: _xml_value(selector["value"])
+            **selector_conditions({selector["kind"]: selector["value"]}, backend="xml", transform=_xml_value)
         }
         constraints = entry.get("constraints", {})
     except (KeyError, TypeError):
@@ -161,10 +186,7 @@ def _selector_spec(
             "WhatsApp selector is invalid",
         )
     try:
-        expected.update({
-            _ATTRIBUTES[key]: _xml_value(value)
-            for key, value in constraints.items()
-        })
+        expected.update(selector_conditions(constraints, backend="xml", transform=_xml_value))
     except KeyError:
         raise WhatsAppCollectorError(
             "whatsapp_profile_invalid",
@@ -179,13 +201,7 @@ def _matching(
     element_id: str,
 ) -> tuple[ET.Element, ...]:
     owner, expected = _selector_spec(profile, element_id)
-    return tuple(
-        node
-        for node in root.iter()
-        if _visible(node)
-        and node.get("package") == owner
-        and all(node.get(key) == value for key, value in expected.items())
-    )
+    return matching_nodes(root, owner, expected, visible=_visible)
 
 
 def _unique_bounds(
@@ -196,13 +212,11 @@ def _unique_bounds(
     label: str,
 ) -> tuple[int, int, int, int]:
     matches = _matching(root, profile, element_id)
-    if len(matches) != 1:
-        qualifier = "unavailable" if not matches else "ambiguous"
-        raise WhatsAppCollectorError(
-            reason_code,
-            f"{label} is {qualifier}",
-        )
-    return _bounds(matches[0])
+    try:
+        node = one_candidate(matches)
+    except ValueError as error:
+        raise WhatsAppCollectorError(reason_code, f"{label} is {error}") from None
+    return _bounds(node)
 
 
 def chat_row_bounds(
@@ -253,16 +267,6 @@ def bluetooth_target_bounds(
     )
 
 
-def _normalized_label(value: str) -> str:
-    return " ".join(
-        "".join(
-            character
-            for character in value
-            if unicodedata.category(character) != "Cf"
-        ).split()
-    )
-
-
 def receiver_bounds(
     root: ET.Element,
     operation: Mapping[str, object],
@@ -289,7 +293,7 @@ def receiver_bounds(
             "Bluetooth receiver Profile is invalid",
         )
     if not any(
-        _visible(node)
+        _visible(node, root)
         and node.get("package") in owners
         and node.get("text", "").strip() in title_labels
         for node in root.iter()
@@ -302,22 +306,22 @@ def receiver_bounds(
     matches = [
         node
         for node in root.iter()
-        if _visible(node)
+        if _visible(node, root)
         and node.get("package") in owners
         and node.get("resource-id") in resource_ids
         and _normalized_label(node.get("text", "")) == expected
     ]
-    if len(matches) != 1:
-        qualifier = "unavailable" if not matches else "ambiguous"
+    if not matches:
         raise WhatsAppCollectorError(
-            f"whatsapp_bluetooth_receiver_{qualifier}",
-            f"Bluetooth receiver is {qualifier}",
+            "whatsapp_bluetooth_receiver_unavailable",
+            "Bluetooth receiver is unavailable",
         )
     parents = {
         child: parent
         for parent in root.iter()
         for child in parent
     }
+    # ponytail: PoC uses the first matching UI row; identity-based selection can replace it.
     current = matches[0]
     while current is not None and current.get("clickable") != "true":
         current = parents.get(current)
@@ -356,9 +360,13 @@ def _share_sheet_spec(operation: Mapping[str, object]):
     fallback = operation.get("fallback")
     if (
         not isinstance(fallback, Mapping)
-        or fallback.get("swipe_direction") not in {"left", "right"}
+        or fallback.get("swipe_direction") not in {"left", "right", "up", "down"}
+        or type(fallback.get("max_swipes")) is not int
+        or not 1 <= fallback["max_swipes"] <= 20
+        or not isinstance(fallback.get("swipe_container_resource_ids"), list)
+        or not fallback["swipe_container_resource_ids"]
+        or not all(isinstance(value, str) and value for value in fallback["swipe_container_resource_ids"])
         or not isinstance(fallback.get("more_labels"), list)
-        or not fallback["more_labels"]
         or not all(
             isinstance(value, str) and value
             for value in fallback["more_labels"]
@@ -368,6 +376,13 @@ def _share_sheet_spec(operation: Mapping[str, object]):
             "whatsapp_share_profile_invalid",
             "Bluetooth share Profile is invalid",
         )
+    overrides = fallback.get("swipe_direction_overrides", {})
+    if not isinstance(overrides, Mapping) or any(
+        resource_id not in fallback["swipe_container_resource_ids"]
+        or not isinstance(direction, str) or direction not in {"left", "right", "up", "down"}
+        for resource_id, direction in overrides.items()
+    ):
+        raise WhatsAppCollectorError("whatsapp_share_profile_invalid", "Invalid share-list swipe direction")
     return strategy, owners, resource_ids, labels, fallback
 
 
@@ -382,7 +397,7 @@ def _share_target_bounds(
     matches = [
         node
         for node in root.iter()
-        if _visible(node)
+        if _visible(node, root)
         and node.get("package") in owners
         and node.get("resource-id") in resource_ids
         and node.get("text", "").strip() in labels
@@ -402,7 +417,7 @@ def _share_sheet_marker(
 ) -> bool:
     _, owners, _, _, _ = _share_sheet_spec(operation)
     if not any(
-        _visible(node) and node.get("package") in owners
+        _visible(node, root) and node.get("package") in owners
         for node in root.iter()
     ):
         raise WhatsAppCollectorError(
@@ -410,6 +425,24 @@ def _share_sheet_marker(
             "Android share sheet is unavailable",
         )
     return True
+
+
+def _share_scroll_container(root, owners, fallback):
+    containers = [
+        node for node in root.iter()
+        if _visible(node, root)
+        and node.get("package") in owners
+        and node.get("resource-id") in fallback["swipe_container_resource_ids"]
+    ]
+    if len(containers) > 1:
+        # S8 switches from the outer ScrollView to the inner list after expansion.
+        containers = [node for node in containers if node.get("scrollable") == "true"]
+    if len(containers) != 1:
+        raise WhatsAppCollectorError(
+            "whatsapp_share_fallback_unavailable",
+            "Expected one visible share-app scrolling container",
+        )
+    return containers[0]
 
 
 def _bluetooth_share_state(context, operation, state, linked):
@@ -427,61 +460,148 @@ def _bluetooth_share_state(context, operation, state, linked):
                 operation,
             ),
             "whatsapp_bluetooth_target_unavailable",
-            timeout=context.app_profile.timings.get(
-                "share_target_wait", 1.0
-            ),
+            timeout=context.app_profile.timings["share_target_wait"],
         )
     except WhatsAppCollectorError as error:
         if error.reason_code != "whatsapp_bluetooth_target_unavailable":
             raise
 
     _, owners, resource_ids, _, fallback = _share_sheet_spec(operation)
-    try:
-        context.ui.swipe(
-            "scan_whatsapp_share_targets",
-            fallback["swipe_direction"],
-            expect_change=True,
-            context=linked,
-        )
-    except Exception as swipe_error:
-        raise WhatsAppCollectorError(
-            "whatsapp_share_fallback_unavailable",
-            str(swipe_error),
-        ) from swipe_error
-
-    swiped_state = _settled_root(
-        context,
-        lambda candidate: _share_sheet_marker(candidate, operation),
+    root, hierarchy, _ = _settled_root(
+        context, lambda candidate: _share_sheet_marker(candidate, operation),
         "whatsapp_share_sheet_unavailable",
     )
-    root, hierarchy, _ = swiped_state
-    try:
-        return root, hierarchy, bluetooth_target_bounds(root, operation)
-    except WhatsAppCollectorError as bluetooth_error:
-        if (
-            bluetooth_error.reason_code
-            != "whatsapp_bluetooth_target_unavailable"
-        ):
-            raise
+    container = _share_scroll_container(root, owners, fallback)
+    first = fallback.get("swipe_direction_overrides", {}).get(container.get("resource-id"), fallback["swipe_direction"])
+    opposite = {"left": "right", "right": "left", "up": "down", "down": "up"}
+    for direction in (first, opposite[first]):
+        for step in range(fallback["max_swipes"] + 1):
+            try:
+                return root, hierarchy, bluetooth_target_bounds(root, operation)
+            except WhatsAppCollectorError as error:
+                if error.reason_code != "whatsapp_bluetooth_target_unavailable":
+                    raise
+            container = _share_scroll_container(root, owners, fallback)
+            try:
+                more_bounds = _share_target_bounds(
+                    container, owners, resource_ids, set(fallback["more_labels"]),
+                    "whatsapp_share_more", "share-sheet More target",
+                )
+            except WhatsAppCollectorError as error:
+                if error.reason_code != "whatsapp_share_more_unavailable":
+                    raise
+            else:
+                _, expanded_state = _click_and_wait(
+                    context, "expand_whatsapp_share_targets", more_bounds,
+                    lambda candidate: bluetooth_target_bounds(candidate, operation),
+                    "whatsapp_bluetooth_target_unavailable", linked,
+                )
+                return expanded_state
+            if step == fallback["max_swipes"]:
+                break
+            before = hierarchy_signature(container)
+            try:
+                context.ui.swipe_bounds(
+                    "scan_whatsapp_share_targets", _bounds(container), direction,
+                    context=linked,
+                )
+            except Exception as error:
+                raise WhatsAppCollectorError("whatsapp_share_fallback_unavailable", str(error)) from error
+            root, hierarchy, _ = _settled_root(
+                context, lambda candidate: _share_sheet_marker(candidate, operation),
+                "whatsapp_share_sheet_unavailable",
+            )
+            if hierarchy_signature(_share_scroll_container(root, owners, fallback)) == before:
+                break
+    raise WhatsAppCollectorError(
+        "whatsapp_share_fallback_unavailable", "Bluetooth and More were not found in the share-app list",
+    )
 
-    more_bounds = _share_target_bounds(
-        root,
-        owners,
-        resource_ids,
-        set(fallback["more_labels"]),
-        "whatsapp_share_more",
-        "share-sheet More target",
-    )
-    _, expanded_state = _click_and_wait(
-        context,
-        "expand_whatsapp_share_targets",
-        more_bounds,
-        lambda candidate: bluetooth_target_bounds(candidate, operation),
-        "whatsapp_bluetooth_target_unavailable",
-        linked,
-    )
-    root, hierarchy, bluetooth_bounds = expanded_state
-    return root, hierarchy, bluetooth_bounds
+
+def _receiver_picker_state(context, operation, receiver_label, linked):
+    picker = operation["receiver_picker"]
+    discovery = picker.get("discovery", {})
+    if not isinstance(discovery, Mapping):
+        raise WhatsAppCollectorError("whatsapp_share_profile_invalid", "Invalid Bluetooth discovery settings")
+    retries = discovery.get("scan_retries", 0)
+    labels = discovery.get("scan_labels", [])
+    if (type(retries) is not int or not 0 <= retries <= 10
+            or not isinstance(labels, list) or not all(isinstance(label, str) and label for label in labels)):
+        raise WhatsAppCollectorError("whatsapp_share_profile_invalid", "Invalid Bluetooth discovery settings")
+    for key in ("wait_sec", "scan_wait_sec"):
+        value = discovery.get(key)
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0):
+            raise WhatsAppCollectorError("whatsapp_share_profile_invalid", "Invalid Bluetooth discovery timeout")
+    for attempt in range(retries + 1):
+        try:
+            return _settled_root(
+                context, lambda root: receiver_bounds(root, operation, receiver_label),
+                "whatsapp_bluetooth_receiver_unavailable",
+                timeout=discovery.get("wait_sec" if attempt == 0 else "scan_wait_sec"),
+            )
+        except WhatsAppCollectorError as error:
+            if error.reason_code != "whatsapp_bluetooth_receiver_unavailable" or attempt == retries:
+                raise
+            root = ET.fromstring(context.device.hierarchy())
+            if not any(_visible(node, root) and node.get("package") in picker["owner_packages"]
+                       and node.get("text", "").strip() in picker["title_labels"] for node in root.iter()):
+                raise
+            scans = [node for node in root.iter()
+                     if _visible(node, root) and node.get("package") in picker["owner_packages"]
+                     and node.get("enabled") != "false"
+                     and (node.get("text", "").strip() in labels or node.get("content-desc", "").strip() in labels)]
+            if len(scans) != 1:
+                raise
+            context.ui.click_bounds("refresh_whatsapp_bluetooth_receivers", _bounds(scans[0]),
+                                    context={**linked, "scan_attempt": attempt + 1})
+
+
+def _select_bluetooth_receiver(context, operation, receiver_label, linked):
+    picker = operation["receiver_picker"]
+    stop_labels = picker.get("discovery", {}).get("stop_labels", [])
+    if not isinstance(stop_labels, list) or not all(isinstance(label, str) and label for label in stop_labels):
+        raise WhatsAppCollectorError("whatsapp_share_profile_invalid", "Invalid Bluetooth stop labels")
+
+    def stop_buttons(root):
+        return [node for node in root.iter() if _visible(node, root)
+                and node.get("package") in picker["owner_packages"]
+                and node.get("clickable") == "true" and node.get("enabled") != "false"
+                and (node.get("text", "").strip() in stop_labels
+                     or node.get("content-desc", "").strip() in stop_labels)]
+
+    # Evidence capture can outlive a discovery animation; read the target again.
+    root, _, _ = _receiver_picker_state(context, operation, receiver_label, linked)
+    stops = stop_buttons(root)
+    if len(stops) > 1:
+        raise WhatsAppCollectorError("whatsapp_bluetooth_receiver_unavailable", "Bluetooth Stop is ambiguous")
+    if stops:
+        context.ui.click_bounds("stop_whatsapp_bluetooth_discovery", _bounds(stops[0]), context=linked)
+
+    def ready(root):
+        if stop_buttons(root):
+            raise WhatsAppCollectorError("whatsapp_bluetooth_receiver_unavailable", "Bluetooth discovery is still active")
+        return receiver_bounds(root, operation, receiver_label)
+
+    _, _, bounds = _settled_root(context, ready, "whatsapp_bluetooth_receiver_unavailable",
+        stable_for=context.app_profile.timings["transition_settle"],
+        signature=lambda root: (hierarchy_signature(root), receiver_bounds(root, operation, receiver_label)))
+
+    def closed(root):
+        visible = [node for node in root.iter() if _visible(node, root)]
+        if (not any(node.get("package") not in {None, "com.android.systemui"} for node in visible)
+                or any(node.get("package") in picker["owner_packages"]
+                       and node.get("text", "").strip() in picker["title_labels"] for node in visible)):
+            raise WhatsAppCollectorError("whatsapp_bluetooth_receiver_selection_unconfirmed")
+        return True
+
+    linked = {**linked, "receiver_label": receiver_label}
+    try:
+        _click_and_wait(context, "select_whatsapp_bluetooth_receiver", bounds, closed,
+                        "whatsapp_bluetooth_receiver_selection_unconfirmed", linked)
+    except WhatsAppCollectorError:
+        context.journal.record_action("confirm_whatsapp_bluetooth_receiver_selection", status="failed", context=linked)
+        raise
+    context.journal.record_action("confirm_whatsapp_bluetooth_receiver_selection", status="success", context=linked)
 
 
 def _safe_component(value: str) -> str:
@@ -496,7 +616,7 @@ def _safe_component(value: str) -> str:
 
 def export_bluetooth_condition(
     condition: Mapping[str, object],
-) -> tuple[str, Path]:
+) -> tuple[str, tuple[Path, ...]]:
     bluetooth = condition.get("bluetooth")
     if not isinstance(bluetooth, Mapping):
         raise WhatsAppCollectorError(
@@ -513,105 +633,104 @@ def export_bluetooth_condition(
         raise WhatsAppCollectorError(
             "whatsapp_bluetooth_condition_invalid"
         )
-    directory = Path(receive_dir).expanduser()
-    try:
-        resolved = directory.resolve(strict=True)
-    except OSError:
-        raise WhatsAppCollectorError(
-            "whatsapp_bluetooth_condition_invalid"
-        ) from None
-    if (
-        not directory.is_absolute()
-        or not resolved.is_dir()
-        or resolved == Path(resolved.anchor)
-        or resolved == Path.home().resolve()
-    ):
+    candidates = bluetooth.get("receive_dirs", [receive_dir])
+    if not isinstance(candidates, list) or not candidates or not all(isinstance(path, str) and path.strip() for path in candidates):
         raise WhatsAppCollectorError(
             "whatsapp_bluetooth_condition_invalid"
         )
-    return receiver_label.strip(), resolved
+    directories = []
+    for candidate in (receive_dir, *candidates):
+        directory = Path(candidate).expanduser()
+        try:
+            resolved = directory.resolve(strict=True)
+        except (OSError, ValueError):
+            raise WhatsAppCollectorError("whatsapp_bluetooth_condition_invalid") from None
+        if (not directory.is_absolute() or not resolved.is_dir()
+                or resolved == Path(resolved.anchor) or resolved == Path.home().resolve()):
+            raise WhatsAppCollectorError("whatsapp_bluetooth_condition_invalid")
+        if resolved not in directories:
+            directories.append(resolved)
+    return receiver_label.strip(), tuple(directories)
 
 
-def _file_inventory(directory: Path) -> dict[Path, tuple[int, int]]:
+def _file_inventory(directory: Path | tuple[Path, ...]) -> dict[Path, tuple[int, int]]:
     result = {}
-    for path in directory.iterdir():
-        if path.name.startswith(".") or not path.is_file():
-            continue
-        stat = path.stat()
-        result[path] = (stat.st_size, stat.st_mtime_ns)
+    directories = (directory,) if isinstance(directory, Path) else directory
+    for root in directories:
+        for path in root.iterdir():
+            if path.name.startswith(".") or not path.is_file():
+                continue
+            stat = path.stat()
+            result[path] = (stat.st_size, stat.st_mtime_ns)
     return result
 
 
 def _wait_for_received_file(
-    directory: Path,
+    directory: Path | tuple[Path, ...],
     baseline: Mapping[Path, tuple[int, int]],
     *,
     timeout: float,
     poll_interval: float,
+    expected_names: list[str] | None = None,
 ) -> Path:
-    deadline = time.monotonic() + max(0.0, timeout)
-    previous = None
-    stable = 0
-    while True:
-        changed = {
-            path: signature
-            for path, signature in _file_inventory(directory).items()
-            if baseline.get(path) != signature
-        }
+    names = {_normalized_label(name).casefold() for name in (expected_names or [])}
+    def candidate():
+        changed = {path: signature for path, signature in changed_inventory(
+            baseline.items(), _file_inventory(directory).items(), signature=lambda row: row[1])
+            if not names or _normalized_label(path.name).casefold() in names}
         if len(changed) > 1:
-            raise WhatsAppCollectorError(
-                "whatsapp_export_receipt_ambiguous"
-            )
-        if len(changed) == 1:
-            current = next(iter(changed.items()))
-            stable = stable + 1 if current == previous else 1
-            previous = current
-            if stable >= 2:
-                return current[0]
-        else:
-            previous = None
-            stable = 0
-        if time.monotonic() >= deadline:
-            raise WhatsAppCollectorError("whatsapp_export_receipt_missing")
-        time.sleep(max(0.0, poll_interval))
+            raise WhatsAppCollectorError("whatsapp_export_receipt_ambiguous")
+        return next(iter(changed.items()), None)
+    selected = first_stable(poll_samples(candidate, timeout=max(0.0, timeout),
+                                        interval=max(0.0, poll_interval)))
+    if selected is not None:
+        return selected[0]
+    raise WhatsAppCollectorError("whatsapp_export_receipt_missing")
 
 
-def _settled_root(
-    context,
-    parser,
-    reason_code: str,
-    *,
-    timeout: float | None = None,
-):
-    settle = context.app_profile.timings.get("transition_settle", 0.5)
+def _export_receipt_error(path: Path) -> str | None:
+    if path.suffix.casefold() != ".zip":
+        return "whatsapp_export_zip_invalid"
+    try:
+        with ZipFile(path) as archive:
+            if archive.testzip() is not None:
+                return "whatsapp_export_zip_corrupt"
+            for member in archive.infolist():
+                if member.is_dir() or not member.filename.casefold().endswith(".txt"):
+                    continue
+                try:
+                    with TextIOWrapper(archive.open(member), encoding="utf-8-sig") as text:
+                        # ponytail: timestamp structure covers messages and system rows;
+                        # extend locale shapes only with a captured export.
+                        if any(_TRANSCRIPT_LINE.match(unicodedata.normalize(
+                            "NFKC", line.lstrip("\u200e\u200f")
+                        )) for line in text):
+                            return None
+                except UnicodeDecodeError:
+                    continue
+    except (BadZipFile, OSError, RuntimeError, NotImplementedError, ZlibError):
+        return "whatsapp_export_zip_invalid"
+    return "whatsapp_export_transcript_missing"
+
+
+def _settled_root(context, parser, reason_code: str, *, timeout: float | None = None,
+                  stable_for: float = 0.0, signature=hierarchy_signature):
+    settle = context.app_profile.timings['transition_settle']
     if settle:
         time.sleep(settle)
-    previous = None
-    stable = 0
     resolved = None
-    last_error = None
-
-    def ready() -> bool:
-        nonlocal previous, stable, resolved, last_error
-        value = context.device.hierarchy()
-        try:
-            root = ET.fromstring(value)
-            parsed = parser(root)
-        except (ET.ParseError, TypeError, WhatsAppCollectorError) as error:
-            previous = None
-            stable = 0
-            last_error = error
-            return False
-        stable = stable + 1 if value == previous else 1
-        previous = value
-        if stable >= 2:
-            resolved = (root, value, parsed)
-            return True
-        return False
-
+    def key(value):
+        nonlocal resolved
+        root = ET.fromstring(value)
+        parsed = parser(root)
+        resolved = (root, value, parsed)
+        return signature(root)
+    ready, state = stability_probe(context.device.hierarchy, key=key,
+        stable_for=stable_for,
+        retry_errors=(ET.ParseError, TypeError, WhatsAppCollectorError))
     if not context.ui.wait_until(ready, timeout=timeout):
-        if isinstance(last_error, WhatsAppCollectorError):
-            raise last_error
+        if isinstance(state['error'], WhatsAppCollectorError):
+            raise state['error']
         raise WhatsAppCollectorError(reason_code)
     return resolved
 
@@ -682,21 +801,58 @@ def identify_bluetooth(
             "whatsapp_chat_screen_unavailable",
             linked,
         )
+    header = _matching(chat_state[0], context.app_profile, "whatsapp.chat-screen")[0]
+    if _normalized_label(header.get("text", "")) != _normalized_label(target["display_name"]):
+        reason = "whatsapp_export_chat_mismatch"
+        attempt_id = acquisition_item_attempt(context, linked)
+        action = context.journal.record_action(
+            "verify_whatsapp_export_chat", status="failed", attempt_id=attempt_id,
+            context=linked, details={"reason": reason, "observed_name": header.get("text", "")})
+        try:
+            retained = retention_action(context, attempt_id, action, linked)
+            context.retain_observation(
+                f"whatsapp/{_safe_component(target['ref'])}/export/{attempt_id}/chat-mismatch-screen",
+                context.device.screenshot(), chat_state[1].encode("utf-8"),
+                attempt_id=attempt_id, action=retained, context=dict(linked))
+        except Exception as error:
+            context.journal.record_action(
+                "retain_whatsapp_chat_mismatch", status="failed", attempt_id=attempt_id,
+                context=linked, details={"error_type": type(error).__name__, "error": str(error)})
+        raise WhatsAppCollectorError(reason, action=action)
     more_options = chat_state[2][1]
-    _, menu_state = _click_and_wait(
-        context,
-        "open_whatsapp_more_options",
-        more_options,
-        lambda root: _unique_bounds(
-            root,
-            context.app_profile,
-            "whatsapp.more",
-            "whatsapp_more_menu_unavailable",
-            "More",
-        ),
-        "whatsapp_more_menu_unavailable",
-        linked,
+    menu_parser = lambda root: _unique_bounds(
+        root, context.app_profile, "whatsapp.more", "whatsapp_more_menu_unavailable", "More",
     )
+    try:
+        _, menu_state = _click_and_wait(
+            context, "open_whatsapp_more_options", more_options, menu_parser,
+            "whatsapp_more_menu_unavailable", linked,
+        )
+    except WhatsAppCollectorError as error:
+        if error.reason_code != "whatsapp_more_menu_unavailable":
+            raise
+        context.journal.record_action("open_whatsapp_more_options", status="retrying",
+            context=linked, details={"retry": 1, "reason": error.reason_code})
+
+        def retry_state(root):
+            if _matching(root, context.app_profile, "whatsapp.more"):
+                return "menu", menu_parser(root)
+            _, bounds = chat_parser(root)
+            header = _matching(root, context.app_profile, "whatsapp.chat-screen")[0]
+            if _normalized_label(header.get("text", "")) != _normalized_label(target["display_name"]):
+                raise WhatsAppCollectorError("whatsapp_export_chat_mismatch")
+            return "chat", bounds
+
+        root, hierarchy, (state, bounds) = _settled_root(
+            context, retry_state, "whatsapp_more_menu_unavailable",
+        )
+        if state == "menu":
+            menu_state = root, hierarchy, bounds
+        else:
+            _, menu_state = _click_and_wait(
+                context, "open_whatsapp_more_options", bounds, menu_parser,
+                "whatsapp_more_menu_unavailable", linked,
+            )
     _, more_state = _click_and_wait(
         context,
         "open_whatsapp_more_menu",
@@ -759,7 +915,7 @@ def identify_bluetooth(
     attempt_id = acquisition_item_attempt(context, linked)
     retained = retention_action(context, attempt_id, action, linked)
     prefix = (
-        f"whatsapp/{_safe_component(target['ref'])}/export/"
+        f"whatsapp/{_safe_component(target['ref'])}/export/{attempt_id}/"
         "share-sheet-screen"
     )
     screen, tree = context.retain_observation(
@@ -787,147 +943,309 @@ def collect_export(
     already_open: bool = False,
 ) -> dict[str, object]:
     context.begin_identification("whatsapp.chat_export")
-    acquisition_item_attempt(context, {"target_ref": target["ref"], "display_name": target["display_name"]})
-    if context.base_context["condition"].get("target", {}).get("kind") == "chat":
-        context.finish_identification("whatsapp.chat_export", completion_condition="export_target_identified")
-    receiver_label, receive_dir = export_bluetooth_condition(
+    linked = {"target_ref": target["ref"], "display_name": target["display_name"]}
+    previous_attempt = None
+    limit = context.app_profile.parameters.get("export_attempts", 2)
+    if type(limit) is not int or not 1 <= limit <= 5:
+        raise WhatsAppCollectorError("whatsapp_export_attempt_limit_invalid")
+    for number in range(1, limit + 1):
+        attempt_context = {**linked, "transfer_attempt": number, "max_transfer_attempts": limit}
+        if previous_attempt:
+            attempt_context["previous_attempt_id"] = previous_attempt
+        attempt_id = acquisition_item_attempt(context, attempt_context)
+        if number == 1 and context.base_context["condition"].get("target", {}).get("kind") == "chat":
+            context.finish_identification("whatsapp.chat_export", completion_condition="export_target_identified")
+        started_at = datetime.now(timezone.utc).isoformat()
+        started = time.perf_counter()
+        failure = None
+        try:
+            _, receive_dirs = export_bluetooth_condition(context.base_context["condition"])
+            initial_inventory = _file_inventory(receive_dirs)
+            report = _collect_export_once(context, target, attempt_id=attempt_id,
+                                          linked=attempt_context, already_open=already_open)
+        except (Exception, KeyboardInterrupt) as error:
+            failure = error
+        timing = {"started_at": started_at, "completed_at": datetime.now(timezone.utc).isoformat(),
+                  "elapsed_seconds": max(0.0, time.perf_counter() - started),
+                  "timing_clock": "perf_counter", "timing_scope": "whatsapp_export_transfer_attempt"}
+        source_action = getattr(failure, "action", None) if failure else report["action"]
+        action = context.journal.record_action(
+            "whatsapp_export_transfer_attempt", status="interrupted" if isinstance(failure, KeyboardInterrupt) else "failed" if failure else "success",
+            attempt_id=attempt_id, context={**attempt_context, **({"source_action_id": source_action.action_id} if source_action else {})},
+            details={**timing, "reason": getattr(failure, "reason_code", None),
+                     "detail": str(failure) if failure else None,
+                     "retry_candidate": getattr(failure, "retryable", False),
+                     "retry_check": getattr(failure, "retry_reason", None)},
+        )
+        if failure is None:
+            context.finish_attempt(attempt_id, ProcedureStatus.COMPLETED, AcquisitionStatus.ACQUIRED,
+                                   action=action, details=timing)
+            return report
+        if number == limit or not isinstance(failure, WhatsAppCollectorError) or not failure.retryable:
+            if isinstance(failure, WhatsAppCollectorError) and failure.action is None:
+                failure.action = action
+            raise failure
+        try:
+            already_open = _restore_export_chat(context, target, attempt_context, allow_list=not already_open)
+            time.sleep(context.app_profile.timings["transition_settle"])
+            try:
+                changed = any(initial_inventory.get(path) != signature
+                              for path, signature in _file_inventory(receive_dirs).items())
+            except OSError as error:
+                raise WhatsAppCollectorError("whatsapp_retry_receive_directory_unavailable", str(error)) from error
+            if changed:
+                raise WhatsAppCollectorError("whatsapp_retry_receive_files_changed")
+        except WhatsAppCollectorError as recovery_error:
+            recovery_error.action = context.journal.record_action(
+                "retry_whatsapp_export", status="failed", attempt_id=attempt_id, context=attempt_context,
+                details={"reason": recovery_error.reason_code, "source_action_id": action.action_id},
+            )
+            raise
+        context.journal.record_action("retry_whatsapp_export", status="success", attempt_id=attempt_id,
+                                      context=attempt_context, details={"next_transfer_attempt": number + 1, "source_action_id": action.action_id})
+        context.finish_attempt(attempt_id, ProcedureStatus.INTERRUPTED, AcquisitionStatus.NOT_ACQUIRED,
+                               reason=failure.reason_code, action=action, details=timing)
+        previous_attempt = attempt_id
+        print(f"AURA: Retrying Bluetooth transfer (1/1) for {target['display_name']}: {failure}", file=sys.stderr, flush=True)
+
+
+def _restore_export_chat(context, target, linked, *, allow_list):
+    def parse(root):
+        chats = _matching(root, context.app_profile, "whatsapp.chat-screen")
+        if len(chats) == 1:
+            if _normalized_label(chats[0].get("text", "")) != _normalized_label(target["display_name"]):
+                raise WhatsAppCollectorError("whatsapp_retry_chat_mismatch")
+            return True
+        if _matching(root, context.app_profile, "whatsapp.chat-list"):
+            if not allow_list:
+                raise WhatsAppCollectorError("whatsapp_retry_chat_list_unexpected")
+            chat_row_bounds(root, context.app_profile, target["display_name"])
+            return False
+        raise WhatsAppCollectorError("whatsapp_retry_chat_unavailable")
+
+    # Bound recovery to the receiver picker/share overlays; never reopen an ordinal chat by name.
+    for step in range(4):
+        try:
+            return _settled_root(context, parse, "whatsapp_retry_chat_unavailable")[2]
+        except WhatsAppCollectorError as error:
+            if error.reason_code != "whatsapp_retry_chat_unavailable" or step == 3:
+                raise
+            context.ui.back("restore_whatsapp_export_chat", context={**linked, "back_attempt": step + 1})
+
+
+def _move_preserved_receipt(context, source, artifact, baseline, source_stat, attempt_id, linked):
+    destination = context.run_dir / artifact.relative_path
+    details = {"source_path": str(source), "destination_path": str(destination),
+               "artifact_id": artifact.artifact_id, "sha256": artifact.sha256, "source_removed": False}
+    try:
+        if source in baseline or source.is_symlink():
+            raise ValueError("Refusing to remove a pre-existing or symbolic-link source")
+        for path in (source, destination):
+            with path.open("rb") as stream:
+                if hashlib.file_digest(stream, "sha256").hexdigest() != artifact.sha256:
+                    raise ValueError("Receipt hash differs from the preserved artifact")
+        current_stat = source.stat()
+        if any(getattr(current_stat, name) != getattr(source_stat, name)
+               for name in ("st_dev", "st_ino", "st_size", "st_mtime_ns")):
+            raise ValueError("Receipt changed during preservation")
+        source.unlink()
+        details["source_removed"] = True
+    except (OSError, ValueError) as error:
+        action = context.journal.record_action("move_whatsapp_export_receipt", status="failed", attempt_id=attempt_id,
+            context=linked, details={**details, "error": str(error)})
+        raise WhatsAppCollectorError("whatsapp_export_source_cleanup_failed", str(error), action=action) from error
+    context.journal.record_action("move_whatsapp_export_receipt", status="success", attempt_id=attempt_id,
+        context=linked, details=details)
+
+
+def _collect_export_once(context, target, *, attempt_id, linked, already_open):
+    prefix = f"whatsapp/{_safe_component(target['ref'])}/export/{attempt_id}"
+
+    captured_stages = set()
+
+    def capture_host_window(window, stage):
+        if stage in captured_stages:
+            return
+        captured_stages.add(stage)
+        capture_context = {**linked, "host_platform": "Windows", "stage": stage}
+        try:
+            capture_context["receiver_handle"] = int(window.handle)
+            image = window.capture_as_image()
+            with BytesIO() as stream:
+                image.save(stream, format="PNG")
+                png = stream.getvalue()
+            action = context.linked_action("capture_windows_bluetooth_receiver", attempt_id,
+                                           context=capture_context)
+            context.artifacts.write_bytes(
+                f"{prefix}/host-bluetooth-{stage}.png",
+                png, kind="host_screen_image", attempt_id=attempt_id, action=action,
+                context=capture_context,
+            )
+        except Exception as error:
+            context.journal.record_action(
+                "capture_windows_bluetooth_receiver", status="failed", attempt_id=attempt_id,
+                context=capture_context, details={"error_type": type(error).__name__, "detail": str(error)},
+            )
+
+    receiver_label, receive_dirs = export_bluetooth_condition(
         context.base_context["condition"]
     )
     host = prepare_windows_bluetooth_receiver(
-        context.app_profile.timings.get("windows_receiver_timeout", 10.0)
+        context.app_profile.timings["windows_receiver_timeout"],
+        capture_window=capture_host_window,
     )
     host_skipped = host["reason"] == "windows_receiver_unsupported"
     host_action = context.journal.record_action(
         "prepare_windows_bluetooth_receiver",
         status="success" if host["ok"] or host_skipped else "failed",
-        context={
-            "target_ref": target["ref"],
-            "display_name": target["display_name"],
-        },
-        details={**host, "skipped": host_skipped},
+        attempt_id=attempt_id,
+        context=linked,
+        details={**host, "skipped": host_skipped,
+                 "receive_directories": [str(path) for path in receive_dirs]},
     )
-    if not host["ok"] and not host_skipped:
-        raise WhatsAppCollectorError(
-            "whatsapp_bluetooth_host_receiver_unavailable",
-            action=host_action,
-        )
-
-    report = identify_bluetooth(
-        context,
-        target,
-        already_open=already_open,
-    )
-    linked = {
-        "target_ref": target["ref"],
-        "display_name": target["display_name"],
-    }
+    failure = None
     try:
-        share_operation = context.system_ui_profile.operations["share_sheet"]
-    except KeyError:
-        raise WhatsAppCollectorError(
-            "whatsapp_share_profile_invalid",
-            "Bluetooth share Profile is invalid",
-        ) from None
-    bluetooth_action, picker_state = _click_and_wait(
-        context,
-        "open_whatsapp_bluetooth_receiver_picker",
-        report["bluetooth_bounds"],
-        lambda root: receiver_bounds(
-            root,
-            share_operation,
-            receiver_label,
-        ),
-        "whatsapp_bluetooth_receiver_unavailable",
-        linked,
-    )
-    root, hierarchy, selected_receiver_bounds = picker_state
-    attempt_id = acquisition_item_attempt(context, linked)
-    retained = retention_action(
-        context, attempt_id, bluetooth_action, linked
-    )
-    prefix = (
-        f"whatsapp/{_safe_component(target['ref'])}/export/"
-        "receiver-picker-screen"
-    )
-    context.retain_observation(
-        prefix,
-        context.device.screenshot(),
-        ET.tostring(root, encoding="utf-8", xml_declaration=True)
-        if not hierarchy.startswith("<?xml")
-        else hierarchy.encode("utf-8"),
-        attempt_id=attempt_id,
-        action=retained,
-        context=dict(linked),
-    )
-
-    baseline = _file_inventory(receive_dir)
-    context.ui.click_bounds(
-        "select_whatsapp_bluetooth_receiver",
-        selected_receiver_bounds,
-        context={**linked, "receiver_label": receiver_label},
-    )
-    receipt_timeout = context.app_profile.timings.get(
-        "export_receipt_timeout", 90.0
-    )
-    receipt_poll = context.app_profile.timings.get(
-        "export_receipt_poll_interval", 0.2
-    )
-    host_finish = finish_windows_bluetooth_receive(
-        timeout_sec=receipt_timeout,
-        poll_interval=receipt_poll,
-    )
-    finish_skipped = (
-        host_finish["reason"] == "windows_receiver_unsupported"
-    )
-    finish_action = context.journal.record_action(
-        "finish_windows_bluetooth_receive",
-        status=(
-            "success"
-            if host_finish["ok"] or finish_skipped
-            else "failed"
-        ),
-        context={**linked, "receiver_label": receiver_label},
-        details={**host_finish, "skipped": finish_skipped},
-    )
-    if not host_finish["ok"] and not finish_skipped:
-        raise WhatsAppCollectorError(
-            "whatsapp_bluetooth_host_receive_unconfirmed",
-            action=finish_action,
+        if not host["ok"] and not host_skipped:
+            raise WhatsAppCollectorError(
+                "whatsapp_bluetooth_host_receiver_unavailable",
+                f"{host['reason']}: {host.get('detail', '')}",
+                action=host_action,
+                retryable=host["reason"] in {"receive_failed", "receiver_waiting_screen_not_found", "receiver_ui_error"},
+            )
+        report = identify_bluetooth(
+            context,
+            target,
+            already_open=already_open,
         )
-    received = _wait_for_received_file(
-        receive_dir,
-        baseline,
-        timeout=receipt_timeout,
-        poll_interval=receipt_poll,
-    )
-    receipt_action = context.journal.record_action(
-        "receive_whatsapp_export",
-        status="success",
-        context={**linked, "receiver_label": receiver_label},
-        details={"filename": received.name},
-    )
-    attempt_id = acquisition_item_attempt(context, linked)
-    retained = retention_action(
-        context, attempt_id, receipt_action, linked
-    )
-    artifact = context.artifacts.retain_file(
-        received,
-        (
-            f"whatsapp/{_safe_component(target['ref'])}/export/"
-            f"{received.name}"
-        ),
-        kind="app_export",
-        attempt_id=attempt_id,
-        action=retained,
-        context={**linked, "receiver_label": receiver_label},
-    )
-    context.complete_open_attempts(AcquisitionStatus.ACQUIRED)
-    return {
-        "action": receipt_action,
-        "artifact_id": artifact.artifact_id,
-        "receiver_label": receiver_label,
-        "received_filename": received.name,
-    }
+        try:
+            share_operation = context.system_ui_profile.operations["share_sheet"]
+        except KeyError:
+            raise WhatsAppCollectorError(
+                "whatsapp_share_profile_invalid",
+                "Bluetooth share Profile is invalid",
+            ) from None
+        bluetooth_action = context.ui.click_bounds(
+            "open_whatsapp_bluetooth_receiver_picker", report["bluetooth_bounds"], context=linked,
+        )
+        picker_state = _receiver_picker_state(context, share_operation, receiver_label, linked)
+        root, hierarchy, _ = picker_state
+        attempt_id = acquisition_item_attempt(context, linked)
+        retained = retention_action(
+            context, attempt_id, bluetooth_action, linked
+        )
+        context.retain_observation(
+            f"{prefix}/receiver-picker-screen",
+            context.device.screenshot(),
+            ET.tostring(root, encoding="utf-8", xml_declaration=True)
+            if not hierarchy.startswith("<?xml")
+            else hierarchy.encode("utf-8"),
+            attempt_id=attempt_id,
+            action=retained,
+            context=dict(linked),
+        )
+
+        baseline = _file_inventory(receive_dirs)
+        _select_bluetooth_receiver(context, share_operation, receiver_label, linked)
+        receipt_timeout = context.app_profile.timings["export_receipt_timeout"]
+        receipt_poll = context.app_profile.timings["export_receipt_poll_interval"]
+        host_finish = finish_windows_bluetooth_receive(
+            timeout_sec=receipt_timeout,
+            poll_interval=receipt_poll,
+            receiver_handle=host.get("receiver_handle"),
+            capture_window=capture_host_window,
+            existing_names=tuple(path.name for path in _file_inventory(receive_dirs)),
+        )
+        finish_skipped = (
+            host_finish["reason"] == "windows_receiver_unsupported"
+        )
+        finish_action = context.journal.record_action(
+            "finish_windows_bluetooth_receive",
+            status=(
+                "success"
+                if host_finish["ok"] or finish_skipped
+                else "failed"
+            ),
+            attempt_id=attempt_id,
+            context={**linked, "receiver_label": receiver_label},
+            details={**host_finish, "skipped": finish_skipped},
+        )
+        if not host_finish["ok"] and not finish_skipped:
+            raise WhatsAppCollectorError(
+                "whatsapp_bluetooth_host_receive_unconfirmed",
+                f"{host_finish['reason']}: {host_finish.get('detail', '')}",
+                action=finish_action,
+                retryable=host_finish["reason"] in {"receive_failed", "receiver_ui_error", "receive_completion_not_found"},
+            )
+        receipt_details = {"receive_directories": [str(path) for path in receive_dirs],
+                           "expected_file_names": host_finish.get("file_names", [])}
+        context.journal.record_action("wait_whatsapp_export_file", status="started", context=linked,
+                                      details=receipt_details)
+        print("AURA: Checking received files after Finish: " + ", ".join(receipt_details["receive_directories"]),
+              file=sys.stderr, flush=True)
+        try:
+            received = _wait_for_received_file(
+                receive_dirs, baseline, timeout=receipt_timeout, poll_interval=receipt_poll,
+                expected_names=host_finish.get("file_names"),
+            )
+        except WhatsAppCollectorError as error:
+            context.journal.record_action("wait_whatsapp_export_file", status="failed", context=linked,
+                                          details={**receipt_details, "reason": error.reason_code})
+            raise
+        source_stat = received.stat()
+        receipt_error = _export_receipt_error(received)
+        receipt_action = context.journal.record_action(
+            "receive_whatsapp_export",
+            status="failed" if receipt_error else "success",
+            context={**linked, "receiver_label": receiver_label},
+            details={"filename": received.name, "source_path": str(received),
+                     "validation_error": receipt_error},
+        )
+        attempt_id = acquisition_item_attempt(context, linked)
+        retained = retention_action(
+            context, attempt_id, receipt_action, linked
+        )
+        artifact = context.artifacts.retain_file(
+            received,
+            (
+                f"{prefix}/"
+                f"{received.name}"
+            ),
+            kind="diagnostic" if receipt_error else "app_export",
+            attempt_id=attempt_id,
+            action=retained,
+            context={**linked, "receiver_label": receiver_label},
+        )
+        if receipt_error:
+            raise WhatsAppCollectorError(receipt_error, action=receipt_action)
+        if not host_skipped:
+            _move_preserved_receipt(context, received, artifact, baseline, source_stat, attempt_id, linked)
+        print(f"AURA: Received file verified and preserved: {received.name}. Continuing to the next step.",
+              file=sys.stderr, flush=True)
+        return {
+            "action": receipt_action,
+            "artifact_id": artifact.artifact_id,
+            "receiver_label": receiver_label,
+            "received_filename": received.name,
+        }
+    except WhatsAppCollectorError as error:
+        failure = error
+        raise
+    finally:
+        cleanup = {"ok": False, "reason": "receiver_handle_unavailable"}
+        if host.get("receiver_handle") is not None:
+            cleanup = close_waiting_windows_bluetooth_receiver(host["receiver_handle"])
+            context.journal.record_action(
+                "cleanup_windows_bluetooth_receiver",
+                status="success" if cleanup["ok"] else "failed",
+                attempt_id=attempt_id,
+                context={"target_ref": target["ref"], "display_name": target["display_name"]},
+                details={**cleanup, "receiver_handle": host["receiver_handle"]},
+            )
+        if failure is not None and failure.retryable:
+            failure.retryable = cleanup["ok"] and cleanup["reason"] in {
+                "idle_receiver_closed", "failed_receiver_closed", "receiver_already_closed",
+            }
+            failure.retry_reason = "receiver_closed" if failure.retryable else "receiver_not_confirmed_closed"
 
 
 __all__ = [

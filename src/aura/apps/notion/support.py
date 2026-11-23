@@ -1,6 +1,9 @@
 """Shared UI and artifact helpers for the exact-version Notion collector."""
 
 from __future__ import annotations
+from ...runtime import record_snapshot
+from ...collection import stability_probe, selector_conditions, display_text, matching_nodes
+from ...parsing import parse_bounds, field_value
 
 import json
 import re
@@ -9,6 +12,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Callable, Mapping
 
 from ...device import COORDINATE_SELECTOR_KEYS
+from ...ui import hierarchy_signature
 from ...models import (
     AcquisitionStatus,
     ActionRef,
@@ -17,19 +21,7 @@ from ...models import (
 
 
 PACKAGE = "notion.id"
-_BOUNDS = re.compile(r"^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$")
 _UNSAFE_LABEL = re.compile(r"[/\\:\x00-\x1f]")
-_UI_KEYS = {
-    "class_name": "className",
-    "content_description": "description",
-    "resource_id": "resourceId",
-    "text": "text",
-    "checked": "checked",
-    "clickable": "clickable",
-    "focusable": "focusable",
-    "scrollable": "scrollable",
-    "selected": "selected",
-}
 
 
 class NotionCollectorError(RuntimeError):
@@ -48,7 +40,11 @@ def item_attempt(
     target_ref = context.base_context.get("condition", {}).get("target", {}).get("ref")
     if target_ref is not None:
         linked.setdefault("target_ref", target_ref)
-    if "attachment_ref" in linked or record_kind == "notion_attachment":
+    if record_kind == "notion_page_listing":
+        target_id, item_type, ref = "notion.inventory", "page_listing", linked.get("page_ref", prefix)
+    elif record_kind == "notion_workspace_members" or prefix.endswith(("/members", "/members.json")):
+        target_id, item_type, ref = "notion.members", "workspace_members", linked.get("workspace_ref", prefix)
+    elif "attachment_ref" in linked or record_kind == "notion_attachment":
         target_id, item_type, ref = (
             "notion.attachments",
             "attachment",
@@ -86,13 +82,13 @@ def item_attempt(
         "notion_workspace_members",
     }:
         target_id, item_type, ref = (
-            "notion.content",
+            "notion.inventory",
             "workspace",
             linked.get("workspace_ref", prefix),
         )
     else:
         target_id, item_type, ref = (
-            "notion.content",
+            "notion.inventory",
             "account_collection",
             linked.get("target_ref", prefix or "account"),
         )
@@ -102,7 +98,6 @@ def item_attempt(
         for name in (
             "target_ref",
             "workspace_ref",
-            "parent_page_ref",
             "page_ref",
             "database_ref",
             "database_item_ref",
@@ -133,24 +128,113 @@ def output_action(
     )
 
 
-def bounds(node: ET.Element) -> tuple[int, int, int, int]:
-    match = _BOUNDS.fullmatch(node.get("bounds", ""))
-    if match is None:
-        raise NotionCollectorError("element bounds are invalid")
-    result = tuple(map(int, match.groups()))
-    if result[0] >= result[2] or result[1] >= result[3]:
-        raise NotionCollectorError("element bounds are invalid")
-    return result
+def bounds(node):
+    try:
+        return parse_bounds(node.get('bounds', ''), allow_negative=False)
+    except ValueError:
+        raise NotionCollectorError("element bounds are invalid") from None
 
 
-def onscreen(node: ET.Element) -> bool:
-    if node.get("package") != PACKAGE:
+def node_label(node):
+    return field_value(node, {"attribute": ["content-desc", "text"]}, ui_fields={})
+
+
+def page_buttons(root, label):
+    return tuple(node for node in matching_nodes(
+        root, PACKAGE, {"class": "android.widget.Button"}, visible=onscreen)
+        if node_label(node) == label)
+
+
+def database_control_labels(profile):
+    return {display_text(profile, name) for name in ('database_filter_sort', 'database_view_settings')}
+
+
+def property_text_cells(root):
+    nodes = tuple(node for node in matching_nodes(
+        root, PACKAGE, {"class": "android.view.View"}, visible=onscreen)
+        if node.get("clickable") != "true" and node.get("text", "").strip())
+    selected = set(nodes)
+    return tuple(node for node in nodes if not any(
+        child is not node and child in selected and child.get("text") == node.get("text")
+        for child in node.iter()))
+
+
+def page_actions_bounds(root):
+    matches = {bounds(node) for node in page_buttons(root, "Actions")
+               if node.get("clickable") == "true"}
+    if len(matches) != 1:
+        raise NotionCollectorError("notion_page_actions_unavailable")
+    return matches.pop()
+
+
+def onscreen(node: ET.Element, root: ET.Element | None = None) -> bool:
+    if node.get("package") != PACKAGE or node.get("visible-to-user") == "false":
         return False
     try:
         left, top, right, bottom = bounds(node)
     except NotionCollectorError:
         return False
-    return right > 0 and bottom > 0 and left < 1080 and top < 2400
+    if root is None:
+        return right > 0 and bottom > 0
+    window_left, window_top, window_right, window_bottom = viewport_bounds(root)
+    return (right > window_left and bottom > window_top
+            and left < window_right and top < window_bottom)
+
+
+def viewport_bounds(root: ET.Element) -> tuple[int, int, int, int]:
+    """Use the observed window, including the system navigation strip."""
+    for node in (root, *root):
+        if node.get("bounds") and (
+            node is root or (
+                node.get("package") == PACKAGE
+                and node.get("class") == "android.widget.FrameLayout"
+            )
+        ):
+            return bounds(node)
+    navigation = [
+        bounds(node) for node in root.iter()
+        if node.get("resource-id") == "com.android.systemui:id/navigation_bar_frame"
+    ]
+    if len(navigation) == 1:
+        left, _, right, bottom = navigation[0]
+        return left, 0, right, bottom
+    visible = [bounds(node) for node in root.iter() if onscreen(node)]
+    if not visible:
+        raise NotionCollectorError("Notion viewport is unavailable")
+    return (min(b[0] for b in visible), min(b[1] for b in visible),
+            max(b[2] for b in visible), max(b[3] for b in visible))
+
+
+def is_page_document(node: ET.Element, root: ET.Element) -> bool:
+    return (
+        onscreen(node, root)
+        and node.get("class") == "android.widget.EditText"
+        and node.get("clickable") != "true"
+        and bool(node.get("text", ""))
+    )
+
+
+def page_keyboard_visible(root: ET.Element, profile) -> bool:
+    marker = display_text(profile, 'page_keyboard_dismiss')
+    return any(onscreen(node, root) and node.get("resource-id") == marker
+               for node in root.iter())
+
+
+def dismiss_page_keyboard(context, sequence, action, observation, *, linked, verify_parent):
+    """Dismiss only an observed keyboard, preserving both states on the same page."""
+    if not page_keyboard_visible(observation["root"], context.app_profile):
+        return action, observation
+    prefix = f"notion/diagnostics/keyboard-{action.action_id}"
+    retain_pair(context, f"{prefix}-before", observation, action, linked)
+    action = context.ui.back(f"notion_dismiss_page_keyboard_{next(sequence):06d}",
+                             context=dict(linked))
+
+    observation = observe(context, f"observation-keyboard-{action.action_id}", action)
+    retain_pair(context, f"{prefix}-after", observation, action, linked)
+    if (page_keyboard_visible(observation["root"], context.app_profile)
+            or not verify_parent(observation["root"])):
+        raise NotionCollectorError("notion_page_keyboard_restore_failed")
+    return action, observation
 
 
 def selector(context, element_id: str) -> dict[str, object]:
@@ -158,7 +242,7 @@ def selector(context, element_id: str) -> dict[str, object]:
         entry = context.app_profile.selectors[element_id]
         spec = entry["selector"]
         result = {
-            _UI_KEYS[str(spec["kind"])]: spec["value"],
+            **selector_conditions({str(spec["kind"]): spec["value"]}, backend="uiautomator"),
             "packageName": spec["owner_package"],
         }
         constraints = entry.get("constraints", {})
@@ -173,9 +257,7 @@ def selector(context, element_id: str) -> dict[str, object]:
     ):
         raise NotionCollectorError("Notion selector is invalid")
     try:
-        result.update({
-            _UI_KEYS[key]: value for key, value in constraints.items()
-        })
+        result.update(selector_conditions(constraints, backend="uiautomator"))
     except KeyError:
         raise NotionCollectorError(
             "Notion selector constraint is invalid"
@@ -194,46 +276,41 @@ def observe(
     action: ActionRef,
     parser: Callable[[ET.Element], object] | None = None,
     diagnostic_name: str | None = None,
+    *, record_kind: str | None = None, timeout: float | None = None,
 ) -> dict[str, object]:
-    time.sleep(context.app_profile.timings.get("transition_settle", 0.5))
-    previous = None
-    current = None
+    time.sleep(context.app_profile.timings["transition_settle"])
     parsed = None
-    parser_error = None
-    stable_polls = 0
-
-    def settled() -> bool:
-        nonlocal previous, current, parsed, parser_error, stable_polls
+    def read():
         current = context.device.hierarchy()
         try:
-            root = ET.fromstring(current)
+            return current, ET.fromstring(current)
         except (ET.ParseError, TypeError):
             raise NotionCollectorError("Notion hierarchy is invalid") from None
+    def key(value):
+        nonlocal parsed
+        current, root = value
         if parser is not None:
-            try:
-                parsed = parser(root)
-                parser_error = None
-            except NotionCollectorError as error:
-                parsed = None
-                parser_error = str(error)
-                previous = None
-                stable_polls = 0
-                return False
-        stable_polls = stable_polls + 1 if current == previous else 1
-        previous = current
-        return stable_polls >= 2
-
-    if not context.ui.wait_until(settled):
-        if parser is not None and isinstance(current, str):
+            parsed = None
+            parsed = parser(root)
+        return hierarchy_signature(root)
+    settled, state = stability_probe(read, key=key,
+        retry_errors=(NotionCollectorError,), clear_error_on_success=True)
+    completed = context.ui.wait_until(settled, timeout=timeout)
+    current = state['value'][0] if state['value'] is not None else None
+    parser_error = str(state['error']) if state['error'] is not None else None
+    if not completed:
+        if (parser is not None or diagnostic_name is not None) and isinstance(current, str):
             linked = {
                 **dict(action.context),
                 "observation_id": observation_id,
                 "parser_error": parser_error,
+                "hierarchy_settled": False,
             }
             attempt_id = item_attempt(
                 context,
                 linked,
                 prefix=diagnostic_name or observation_id,
+                record_kind=record_kind,
             )
             retained = output_action(context, attempt_id, action, linked)
             context.retain_observation(
@@ -248,31 +325,27 @@ def observe(
                 action=retained,
                 context=linked,
             )
-            context.finish_attempt(
-                attempt_id,
-                ProcedureStatus.INTERRUPTED,
-                AcquisitionStatus.NOT_ACQUIRED,
-                reason=str(parser_error or "notion_hierarchy_unsettled"),
-                action=retained,
-                observation_id=context.observations[-1].observation_id,
-            )
+            if parser is not None:
+                context.finish_attempt(
+                    attempt_id,
+                    ProcedureStatus.INTERRUPTED,
+                    AcquisitionStatus.NOT_ACQUIRED,
+                    reason=str(parser_error or "notion_hierarchy_unsettled"),
+                    action=retained,
+                    observation_id=context.observations[-1].observation_id,
+                )
         raise NotionCollectorError(
             parser_error or "Notion hierarchy did not settle"
         )
     assert isinstance(current, str)
     root = ET.fromstring(current)
     screen = context.device.screenshot()
-    context.journal.append(
-        "observation_recorded",
-        status="success",
-        context={"observation_id": observation_id},
-        details={"action_event_id": action.event_id},
-    )
+    snapshot = record_snapshot(context.journal, observation_id, action, screen, current.encode('utf-8'))
     result = {
         "observation_id": observation_id,
         "root": root,
-        "screen": screen,
-        "tree": current.encode("utf-8"),
+        "screen": snapshot["screen_image"],
+        "tree": snapshot["ui_tree"],
     }
     if parser is not None:
         result["parsed"] = parsed

@@ -1,9 +1,19 @@
 """Notion 0.6.4030 Board database parsing and collection."""
 
 from __future__ import annotations
+from ...collection import (
+    seek_window,
+    matching_candidates,
+    overlap_candidates,
+    iter_windows,
+    visit_candidates,
+    reconcile_overlap,
+)
+
 
 import xml.etree.ElementTree as ET
 from collections import Counter
+from itertools import groupby
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
 
@@ -15,20 +25,21 @@ from .attachments import (
 )
 from .support import (
     PACKAGE,
+    database_control_labels,
+    property_text_cells,
+    node_label as _label,
     NotionCollectorError,
     bounds,
+    is_page_document,
     observe,
     onscreen,
     retain_pair,
     safe_component,
+    viewport_bounds,
     write_json,
 )
 
 
-_DATABASE_CONTROLS = {
-    "Filter and Sort",
-    "Edit view layout, grouping and more...",
-}
 _EMPTY_BODY = "Tap here to continue…"
 
 
@@ -48,21 +59,15 @@ class DatabaseCollectionError(NotionCollectorError):
         self.database = database
 
 
-def _label(node: ET.Element) -> str:
-    return (
-        node.get("content-desc", "").strip()
-        or node.get("text", "").strip()
-    )
-
-
 def parse_database(
     root: ET.Element,
     expected_title: str,
+    profile,
 ) -> dict[str, object]:
     titles = [
         node
         for node in root.iter()
-        if onscreen(node)
+        if onscreen(node, root)
         and node.get("class") == "android.widget.EditText"
         and node.get("clickable") == "true"
         and node.get("text", "").strip() == expected_title
@@ -74,16 +79,16 @@ def parse_database(
     controls = {
         _label(node)
         for node in root.iter()
-        if onscreen(node)
+        if onscreen(node, root)
         and node.get("class") == "android.widget.Button"
     }
-    if not _DATABASE_CONTROLS <= controls:
+    if not database_control_labels(profile) <= controls:
         raise NotionCollectorError("Notion database controls are unavailable")
     views = [
         label
         for node in root.iter()
         if (
-            onscreen(node)
+            onscreen(node, root)
             and node.get("class") == "android.widget.Button"
             and (label := _label(node)).endswith(" View")
         )
@@ -93,7 +98,7 @@ def parse_database(
     descriptions = [
         node.get("text", "").strip()
         for node in root.iter()
-        if onscreen(node)
+        if onscreen(node, root)
         and node.get("class") == "android.widget.EditText"
         and node.get("clickable") == "true"
         and node not in titles
@@ -113,8 +118,9 @@ def parse_database(
 
 
 def parse_board_cards(
-    root: ET.Element,
+    root: ET.Element, *, include_clipped: bool = False,
 ) -> tuple[dict[str, object], ...]:
+    viewport_left, _, viewport_right, viewport_bottom = viewport_bounds(root)
     navigation_top = min(
         (
             bounds(node)[1]
@@ -122,13 +128,33 @@ def parse_board_cards(
             if node.get("resource-id")
             == "com.android.systemui:id/navigation_bar_frame"
         ),
-        default=2400,
+        default=viewport_bottom,
     )
+    parents = {child: parent for parent in root.iter() for child in parent}
+    # In the observed WebView tree each column owns a New page button. Its XML
+    # sibling index survives horizontal clipping; pixel positions do not.
+    columns = {}
+    for control in root.iter():
+        if control.get("class") != "android.widget.Button" or control.get("text") != "New page":
+            continue
+        owner = parents.get(control)
+        while owner is not None:
+            if sum(child.get("class") == "android.widget.Button" and child.get("text") == "New page"
+                   for child in owner.iter()) > 1:
+                break  # This is the board, not the empty column owning this button.
+            if any(child.get("content-desc", "").strip() and child.get("class") == "android.view.View"
+                   and child.get("clickable") == "true" and child.get("focusable") == "true"
+                   for child in owner.iter()):
+                if owner.get("index") is not None:
+                    for child in owner.iter():
+                        columns[child] = owner.get("index")
+                break
+            owner = parents.get(owner)
     result = []
     for node in root.iter():
         description = node.get("content-desc", "")
         if (
-            not onscreen(node)
+            not onscreen(node, root)
             or node.get("class") != "android.view.View"
             or node.get("clickable") != "true"
             or node.get("focusable") != "true"
@@ -142,17 +168,15 @@ def parse_board_cards(
             if description.startswith(".. ")
             else description.strip()
         )
-        if (
-            not title
-            or left <= 0
-            or right >= 1080
-            or top < 0
-            or bottom > navigation_top
-        ):
+        selectable = (left > viewport_left and right < viewport_right
+                      and top >= 0 and bottom <= navigation_top)
+        if not title or (not include_clipped and not selectable):
             continue
         result.append({
             "title": title,
+            **({"column_slot": columns[node]} if node in columns else {}),
             "bounds": (left, top, right, bottom),
+            **({"selectable": selectable} if include_clipped else {}),
         })
     result.sort(key=lambda item: (item["bounds"][0], item["bounds"][1]))
     return tuple(result)
@@ -162,7 +186,7 @@ def _property_rows(root: ET.Element) -> list[dict[str, object]]:
     add_property_tops = [
         bounds(node)[1]
         for node in root.iter()
-        if onscreen(node)
+        if onscreen(node, root)
         and node.get("class") == "android.widget.Button"
         and _label(node) == "Add a property"
     ]
@@ -174,19 +198,12 @@ def _property_rows(root: ET.Element) -> list[dict[str, object]]:
         tuple[int, int],
         list[tuple[int, int, str]],
     ] = {}
-    for node in root.iter():
-        if (
-            not onscreen(node)
-            or node.get("class") != "android.view.View"
-            or node.get("clickable") == "true"
-            or not node.get("text", "").strip()
-        ):
-            continue
+    for node in property_text_cells(root):
         left, top, right, bottom = bounds(node)
         if bottom > add_property_tops[0]:
             continue
         groups.setdefault((top, bottom), []).append(
-            (left, right, node.get("text", "").strip())
+            (left, right, node.get("text", ""))
         )
     rows = []
     for (top, _), cells in groups.items():
@@ -208,20 +225,9 @@ def _rendered_body(
     title: str,
     properties: list[dict[str, object]],
 ) -> str:
-    documents = []
-    for node in root.iter():
-        if (
-            not onscreen(node)
-            or node.get("class") != "android.widget.EditText"
-            or node.get("clickable") == "true"
-            or not node.get("text", "")
-        ):
-            continue
-        left, top, right, bottom = bounds(node)
-        if left == 0 and right == 1080 and bottom - top >= 1800:
-            documents.append(node.get("text", ""))
+    documents = [node for node in root.iter() if is_page_document(node, root)]
     if not documents and sum(
-        onscreen(node)
+        onscreen(node, root)
         and node.get("class") == "android.widget.TextView"
         and node.get("text", "").strip() == _EMPTY_BODY
         for node in root.iter()
@@ -231,7 +237,8 @@ def _rendered_body(
         raise NotionCollectorError(
             "Notion database item body is ambiguous"
         )
-    lines = documents[0].splitlines()
+    document = documents[0]
+    lines = document.get("text", "").splitlines()
     visible = [
         (index, line.strip())
         for index, line in enumerate(lines)
@@ -239,29 +246,43 @@ def _rendered_body(
     ]
     expected = [title]
     for row in properties:
-        expected.extend((str(row["name"]), str(row["value"])))
+        expected.extend((str(row["name"]).strip(), str(row["value"]).strip()))
     expected.append("Add a property")
-    position = 0
-    for value in expected:
-        match = next(
-            (
-                index
-                for index in range(position, len(visible))
-                if visible[index][1] == value
-            ),
-            None,
+    labels = [value for _, value in visible]
+    position = len(expected)
+    # The nested GridView and its following control prove the property scope.
+    # Its accessibility values are independent of the aggregate document text.
+    grids = [node for node in document if node.get("class") == "android.widget.GridView"]
+    boundaries = [node for node in document
+                  if node.get("class") == "android.widget.Button"
+                  and _label(node) == "Add a property"]
+    structured = (
+        len(grids) == len(boundaries) == 1
+        and list(document).index(grids[0]) < list(document).index(boundaries[0])
+        and bounds(grids[0])[3] <= bounds(boundaries[0])[3]
+        and any(node.get("class") == "android.widget.EditText"
+                and node.get("clickable") == "true"
+                and node.get("text", "").strip() == title
+                and bounds(node)[3] <= bounds(grids[0])[1]
+                for node in document.iter() if onscreen(node, root))
+        and [node.get("text", "").strip() for node in property_text_cells(grids[0])] == expected[1:-1]
+    )
+    prefix = labels[:position]
+    if (labels.count("Add a property") != 1
+            or len(prefix) != position
+            or prefix[0] != title
+            or prefix[-1] != "Add a property"
+            or (prefix != expected and not (
+                structured and prefix[1:-1:2] == expected[1:-1:2]
+            ))):
+        raise NotionCollectorError(
+            "Notion database item body prefix is inconsistent"
         )
-        if match is None:
-            raise NotionCollectorError(
-                "Notion database item body prefix is inconsistent"
-            )
-        position = match + 1
     start = visible[position][0] if position < len(visible) else len(lines)
     template_suffix = ("New Task", "Empty", "New template")
-    labels = tuple(value for _, value in visible)
     end = (
         visible[-len(template_suffix)][0]
-        if labels[-len(template_suffix):] == template_suffix
+        if tuple(labels[-len(template_suffix):]) == template_suffix
         else len(lines)
     )
     body_lines = lines[start:end]
@@ -277,14 +298,14 @@ def _rendered_body(
     return "\n".join(body_lines)
 
 
-def parse_database_item(
+def _item_properties(
     root: ET.Element,
     expected_title: str,
-) -> dict[str, object]:
+) -> list[dict[str, object]]:
     titles = [
         node
         for node in root.iter()
-        if onscreen(node)
+        if onscreen(node, root)
         and node.get("class") == "android.widget.EditText"
         and node.get("clickable") == "true"
         and node.get("text", "").strip() == expected_title
@@ -293,7 +314,14 @@ def parse_database_item(
         raise NotionCollectorError(
             "Notion database item title was not verified"
         )
-    properties = _property_rows(root)
+    return _property_rows(root)
+
+
+def parse_database_item(
+    root: ET.Element,
+    expected_title: str,
+) -> dict[str, object]:
+    properties = _item_properties(root, expected_title)
     return {
         "title": expected_title,
         "properties": properties,
@@ -311,38 +339,35 @@ def _action_name(sequence, stem: str) -> str:
 
 def _signature(
     root: ET.Element,
-) -> tuple[tuple[str, str, str, str, str], ...]:
-    return tuple(
+) -> tuple:
+    hierarchy = tuple(
         (
             node.get("class", ""),
             node.get("resource-id", ""),
             node.get("text", ""),
             node.get("content-desc", ""),
-            node.get("bounds", ""),
         )
         for node in root.iter()
         if node.get("package") == PACKAGE
     )
+    # A clipped card becoming selectable is progress even if its label existed.
+    visible_cards = tuple((card.get("column_slot"), card["title"], card["selectable"]) for card in parse_board_cards(root, include_clipped=True))
+    return hierarchy, visible_cards
 
 
-def _board_bounds(root: ET.Element) -> tuple[int, int, int, int]:
+def _board_bounds(root: ET.Element, profile, interaction_area) -> tuple[int, int, int, int]:
+    controls = database_control_labels(profile)
     control_bottoms = [
         bounds(node)[3]
         for node in root.iter()
-        if onscreen(node)
+        if onscreen(node, root)
         and node.get("class") == "android.widget.Button"
-        and _label(node) in _DATABASE_CONTROLS
+        and _label(node) in controls
     ]
-    navigation = [
-        bounds(node)
-        for node in root.iter()
-        if node.get("resource-id")
-        == "com.android.systemui:id/navigation_bar_frame"
-    ]
-    if not control_bottoms or len(navigation) != 1:
+    if not control_bottoms:
         raise NotionCollectorError("Notion Board bounds are unavailable")
-    left, bottom, right, _ = navigation[0]
-    top = max(control_bottoms)
+    left, top, right, bottom = interaction_area
+    top = max(top, *control_bottoms)
     if top >= bottom:
         raise NotionCollectorError("Notion Board bounds are unavailable")
     return left, top, right, bottom
@@ -354,6 +379,7 @@ def _swipe_observe(
     page_ref: str,
     direction: str,
     observation: Mapping[str, object],
+    *, align: bool = False,
 ):
     action_name = _action_name(
         sequence, f"notion_database_swipe_{direction}"
@@ -361,8 +387,11 @@ def _swipe_observe(
     if direction in {"left", "right"}:
         action = context.ui.swipe_bounds(
             action_name,
-            _board_bounds(observation["root"]),
+            _board_bounds(observation["root"], context.app_profile, context.device.interaction_bounds()),
             direction,
+            **({"duration": context.app_profile.timings["board_alignment_duration"],
+                "distance_ratio": context.app_profile.parameters["board_alignment_distance_ratio"]}
+               if align else {}),
             context={"page_ref": page_ref},
         )
     else:
@@ -379,26 +408,14 @@ def _swipe_observe(
     )
 
 
-def _swipe_to_edge(
-    context,
-    sequence,
-    page_ref: str,
-    direction: str,
-    observation: Mapping[str, object],
-):
-    current = observation
-    while True:
-        before = _signature(current["root"])
-        action, after = _swipe_observe(
-            context,
-            sequence,
-            page_ref,
-            direction,
-            current,
-        )
-        current = after
-        if _signature(after["root"]) == before:
-            return action, current
+def _swipe_to_edge(context, sequence, page_ref: str, direction: str, observation: Mapping[str, object]):
+    current = (None, observation)
+    def advance():
+        nonlocal current
+        current = _swipe_observe(context, sequence, page_ref, direction, current[1])
+    _, last = seek_window(lambda: current, advance, lambda value: _signature(value[1]['root']),
+                          lambda value: None, adjacent=True)
+    return last
 
 
 def _normalize_board(
@@ -423,14 +440,21 @@ def _normalize_board(
     )
 
 
-def _overlap(
-    previous: Sequence[str],
-    current: Sequence[str],
-) -> int:
-    for size in range(min(len(previous), len(current)), 0, -1):
-        if list(previous[-size:]) == list(current[:size]):
-            return size
-    return 0
+def _overlap(previous: Sequence[str], current: Sequence[str]) -> int:
+    return max(overlap_candidates(previous, current), default=0)
+
+
+def _merge_board_cards(previous, current, *, same_column=False):
+    if same_column:
+        slots = {row['column_slot'] for row in (*previous, *current) if 'column_slot' in row}
+        if len(slots) == 1:
+            slot = next(iter(slots))
+            previous = [{**row, 'column_slot': slot} for row in previous]
+            current = [{**row, 'column_slot': slot} for row in current]
+    overlap = _overlap([(row.get("column_slot"), row["title"]) for row in previous],
+                       [(row.get("column_slot"), row["title"]) for row in current])
+    return reconcile_overlap(previous, current, overlap,
+        lambda old, new: old if old["selectable"] and not new["selectable"] else new)
 
 
 def _scan_board(
@@ -447,39 +471,9 @@ def _scan_board(
     )
     result = []
     horizontal_index = 0
-    while True:
-        current = horizontal_top
-        vertical_index = 0
-        column_titles: list[str] = []
-        while True:
-            cards = parse_board_cards(current["root"])
-            visible_titles = [str(card["title"]) for card in cards]
-            overlap = _overlap(column_titles, visible_titles)
-            start = len(column_titles) - overlap
-            for index, card in enumerate(cards):
-                position = start + index
-                if position < len(column_titles):
-                    continue
-                result.append({
-                    **card,
-                    "horizontal_index": horizontal_index,
-                    "vertical_index": vertical_index,
-                    "visible_index": index,
-                })
-            column_titles.extend(visible_titles[overlap:])
-            before = _signature(current["root"])
-            action, after = _swipe_observe(
-                context,
-                sequence,
-                page_ref,
-                "up",
-                current,
-            )
-            current = after
-            if _signature(after["root"]) == before:
-                break
-            vertical_index += 1
-
+    current = horizontal_top
+    def advance_horizontal():
+        nonlocal action, horizontal_top, horizontal_index
         action, horizontal_top = _swipe_to_edge(
             context,
             sequence,
@@ -487,7 +481,6 @@ def _scan_board(
             "down",
             current,
         )
-        before = _signature(horizontal_top["root"])
         action, after = _swipe_observe(
             context,
             sequence,
@@ -495,10 +488,34 @@ def _scan_board(
             "left",
             horizontal_top,
         )
-        if _signature(after["root"]) == before:
-            return tuple(result), action, horizontal_top
         horizontal_top = after
         horizontal_index += 1
+    for _ in iter_windows(lambda: horizontal_top, advance_horizontal,
+            lambda value: _signature(value["root"]), adjacent=True,
+            boundary_repeats=context.app_profile.parameters["board_boundary_repeats"]):
+        current = horizontal_top
+        vertical_index = 0
+        column_cards = {}
+        def advance_vertical():
+            nonlocal action, current, vertical_index
+            action, current = _swipe_observe(context, sequence, page_ref, "up", current)
+            vertical_index += 1
+        for current in iter_windows(lambda: current, advance_vertical,
+                                     lambda value: _signature(value["root"]), adjacent=True):
+            cards = [
+                {**card, "horizontal_index": horizontal_index,
+                 "vertical_index": vertical_index, "visible_index": index}
+                for index, card in enumerate(parse_board_cards(
+                    current["root"], include_clipped=True))
+            ]
+            # Partition by the observed column geometry before merging vertical
+            # overlap; neighboring clipped columns must not interleave rows.
+            for column, rows in groupby(cards, key=lambda row: (row["bounds"][0], row["bounds"][2])):
+                column_cards[column] = _merge_board_cards(column_cards.get(column, []), list(rows), same_column=True)
+        result = _merge_board_cards(result,
+            [row for column in sorted(column_cards) for row in column_cards[column]])
+
+    return tuple(result), action, horizontal_top
 
 
 def _find_card(
@@ -507,7 +524,18 @@ def _find_card(
     page_ref: str,
     observation: Mapping[str, object],
     item: Mapping[str, object],
+    *,
+    inventory=(),
+    entry_action=None,
 ):
+    if entry_action is not None and sum(row["title"] == item["title"] for row in inventory) == 1:
+        matches = list(matching_candidates(
+            parse_board_cards(observation["root"], include_clipped=True), item,
+            key=lambda row: row["title"]))
+        if len(matches) == 1 and matches[0]["selectable"]:
+            row = matches[0]
+            return {"title": row["title"], "bounds": row["bounds"]}, entry_action, observation
+
     def replay(candidate, start):
         action, current = _normalize_board(
             context,
@@ -531,46 +559,41 @@ def _find_card(
                 "up",
                 current,
             )
-        cards = parse_board_cards(current["root"])
+        cards = parse_board_cards(current["root"], include_clipped=True)
         index = int(candidate["visible_index"])
-        row = (
-            cards[index]
-            if index < len(cards)
-            and cards[index]["title"] == candidate["title"]
-            else None
-        )
-        return row, action, current
+        row = (cards[index] if index < len(cards)
+               and cards[index]["title"] == candidate["title"]
+               and cards[index].get("column_slot") == candidate.get("column_slot") else None)
+        if row is None and sum(c["title"] == candidate["title"] for c in inventory) == 1:
+            matches = [c for c in cards if c["title"] == candidate["title"]]
+            row = matches[0] if len(matches) == 1 else None
+        for _ in range(context.app_profile.parameters["board_alignment_attempts"]):
+            if row is None or row["selectable"]:
+                break
+            left, top, right, bottom = row["bounds"]
+            view_left, _, view_right, view_bottom = _board_bounds(
+                current["root"], context.app_profile, context.device.interaction_bounds())
+            direction = ("right" if left <= view_left else "left" if right >= view_right
+                         else "up" if bottom > view_bottom else "down")
+            action, current = _swipe_observe(
+                context, sequence, page_ref, direction, current, align=True)
+            matches = list(matching_candidates(
+                parse_board_cards(current["root"], include_clipped=True), candidate,
+                key=lambda value: (value.get("column_slot"), value["title"])))
+            # A title alone cannot resolve multiple equal cards after movement.
+            row = matches[0] if len(matches) == 1 else None
+        if row is not None and row["selectable"]:
+            return {"title": row["title"], "bounds": row["bounds"]}, action, current
+        return None, action, current
 
-    row, action, current = replay(item, observation)
-    if row is not None:
-        return row, action, current
+    current = observation
+    for _ in range(2):
+        row, action, current = replay(item, current)
+        if row is not None:
+            return row, action, current
 
-    inventory, action, current = _scan_board(
-        context,
-        sequence,
-        page_ref,
-        current,
-    )
-    matches = [
-        candidate
-        for candidate in inventory
-        if candidate["title"] == item["title"]
-    ]
-    occurrence = int(item["same_title_occurrence"])
-    if occurrence <= 0 or occurrence > len(matches):
-        raise DatabaseCollectionError(
-            "notion_database_item_unavailable",
-            item_ref=str(item["database_item_ref"]),
-            action=action,
-        )
-    row, action, current = replay(matches[occurrence - 1], current)
-    if row is None:
-        raise DatabaseCollectionError(
-            "notion_database_item_unavailable",
-            item_ref=str(item["database_item_ref"]),
-            action=action,
-        )
-    return row, action, current
+    raise DatabaseCollectionError(
+        "notion_database_card_unresolved", item_ref=str(item["database_item_ref"]), action=action)
 
 
 def _observe_parent(context, sequence, page_ref: str, action):
@@ -582,9 +605,9 @@ def _observe_parent(context, sequence, page_ref: str, action):
     return action, observation
 
 
-def _is_board(root: ET.Element, title: str) -> bool:
+def _is_board(root: ET.Element, title: str, profile) -> bool:
     try:
-        return parse_database(root, title)["view_layout"] == "board"
+        return parse_database(root, title, profile)["view_layout"] == "board"
     except NotionCollectorError:
         return False
 
@@ -627,7 +650,8 @@ def _item_context_visible(
     title: str,
 ) -> bool:
     try:
-        return parse_database_item(root, title)["title"] == title
+        _item_properties(root, title)
+        return True
     except NotionCollectorError:
         return False
 
@@ -671,6 +695,7 @@ def collect_open_database(
         parsed = parse_database(
             observation["root"],
             str(page["title"]),
+            context.app_profile,
         )
     except NotionCollectorError as error:
         raise DatabaseCollectionError(
@@ -737,6 +762,8 @@ def collect_open_database(
         item_opened = False
         item_parsed = None
         item_source = None
+        rendered_document = None
+        parser_error = None
         attachment_records = []
         try:
             row, last_action, current = _find_card(
@@ -745,6 +772,8 @@ def collect_open_database(
                 page_ref,
                 current,
                 item,
+                inventory=inventory,
+                entry_action=last_action,
             )
             last_action = context.ui.click_bounds(
                 _action_name(sequence, "notion_open_database_item"),
@@ -763,6 +792,7 @@ def collect_open_database(
             item_opened = not _is_board(
                 item_observation["root"],
                 str(page["title"]),
+                context.app_profile,
             )
             item_state_known = True
             if not item_opened:
@@ -771,10 +801,6 @@ def collect_open_database(
                     item_ref=item_ref,
                     action=last_action,
                 )
-            item_parsed = parse_database_item(
-                item_observation["root"],
-                title,
-            )
             item_source = retain_pair(
                 context,
                 f"{_item_prefix(page_prefix, item_ref, title)}/item",
@@ -785,6 +811,20 @@ def collect_open_database(
                     "database_item_ref": item_ref,
                 },
             )
+            item_root = item_observation["root"]
+            documents = [node.get("text", "") for node in item_root.iter()
+                         if is_page_document(node, item_root)]
+            rendered_document = documents[0] if len(documents) == 1 else None
+            item_parsed = {
+                "properties": _item_properties(item_root, title),
+                "rendered_body": "",
+            }
+            try:
+                item_parsed["rendered_body"] = _rendered_body(
+                    item_root, title, item_parsed["properties"]
+                )
+            except NotionCollectorError as error:
+                parser_error = str(error)
             item_prefix = _item_prefix(
                 page_prefix,
                 item_ref,
@@ -831,6 +871,8 @@ def collect_open_database(
                 "same_title_occurrence": title_counts[title],
                 "properties": item_parsed["properties"],
                 "rendered_body": item_parsed["rendered_body"],
+                "rendered_document": rendered_document,
+                "parser_error": parser_error,
                 "attachment_count": len(attachment_records),
                 "attachment_materialized_count": sum(
                     record["acquisition_status"] == "materialized"
@@ -842,10 +884,11 @@ def collect_open_database(
                 ),
                 "attachments": attachment_records,
                 "acquisition_status": (
-                    "partial" if attachment_partial else "complete"
+                    "partial" if parser_error or attachment_partial else "complete"
                 ),
                 "reason_code": (
-                    "notion_attachment_materialize_partial"
+                    "notion_database_item_body_unverified" if parser_error
+                    else "notion_attachment_materialize_partial"
                     if attachment_partial
                     else None
                 ),
@@ -884,6 +927,8 @@ def collect_open_database(
                 "rendered_body": (
                     item_parsed["rendered_body"] if item_parsed else ""
                 ),
+                "rendered_document": rendered_document,
+                "parser_error": parser_error or str(error),
                 "attachment_count": len(attachment_records),
                 "attachment_materialized_count": materialized_count,
                 "attachment_out_of_scope_count": out_of_scope_count,
@@ -905,11 +950,9 @@ def collect_open_database(
         finally:
             try:
                 if click_dispatched and not item_state_known:
-                    item_opened = not _is_board(
-                        ET.fromstring(context.device.hierarchy()),
-                        str(page["title"]),
-                    )
-                if item_opened:
+                    item_opened = _item_context_visible(
+                        ET.fromstring(context.device.hierarchy()), title)
+                if item_opened and _item_context_visible(ET.fromstring(context.device.hierarchy()), title):
                     last_action = context.ui.back(
                         _action_name(sequence, "notion_close_database_item"),
                         context={
@@ -926,6 +969,7 @@ def collect_open_database(
                 restored = parse_database(
                     current["root"],
                     str(page["title"]),
+                    context.app_profile,
                 )
                 if restored["view_layout"] != "board":
                     raise NotionCollectorError(

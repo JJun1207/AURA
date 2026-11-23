@@ -23,6 +23,9 @@
       "expected_artifacts": [
         "structured_data"
       ],
+      "remote_access_environments": [
+        "controlled_online"
+      ],
       "rules": {
         "identification": {
           "id": "notesnook.note_revision_and_trash_cards",
@@ -69,6 +72,10 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "Signed-in local storage may expose notes, checklist state, revision content and trash listings/metadata. Retain accessible records and record unavailable portions.",
+        "controlled_online": "Use the same note, revision and trash-record procedures with synchronization available; the observed sync label does not itself determine acquisition success."
       }
     },
     {
@@ -84,6 +91,9 @@
       "expected_artifacts": [
         "structured_data",
         "downloaded_file"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
       ],
       "rules": {
         "identification": {
@@ -133,6 +143,10 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "Attempt the implemented save procedure for locally available attachments so cached originals are not skipped; record unavailable files explicitly.",
+        "controlled_online": "Use the attachment-save procedure with remote retrieval available and verify each resulting original."
       }
     },
     {
@@ -142,10 +156,14 @@
       ],
       "method": "export",
       "acquisition_environments": [
-        "device_only"
+        "device_only",
+        "controlled_online"
       ],
       "expected_artifacts": [
         "export_file"
+      ],
+      "remote_access_environments": [
+        "controlled_online"
       ],
       "rules": {
         "identification": {
@@ -188,6 +206,10 @@
             "fallbacks": {}
           }
         }
+      },
+      "environment_rationale": {
+        "device_only": "The native export procedure can operate on available local notes. Attempt the implemented export and record actual authentication or data-availability failures.",
+        "controlled_online": "Allow the same native export procedure after synchronization, subject to the app's authentication and export requirements."
       }
     }
   ],
@@ -438,6 +460,72 @@
         "class_name": "android.widget.Button",
         "clickable": true
       }
+    },
+    "documentsui.android.show-roots": {
+      "selector": {
+        "kind": "content_description",
+        "owner_package": "com.android.documentsui",
+        "selector_id": "documentsui.android.show-roots",
+        "value": "Show roots"
+      },
+      "constraints": {
+        "class_name": "android.widget.ImageButton",
+        "clickable": true
+      }
+    },
+    "documentsui.android.download-root": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.android.documentsui",
+        "selector_id": "documentsui.android.download-root",
+        "value": "Downloads"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "documentsui.android.aura-directory": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.android.documentsui",
+        "selector_id": "documentsui.android.aura-directory",
+        "value": "AURA"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "documentsui.android.toolbar": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.android.documentsui",
+        "selector_id": "documentsui.android.toolbar",
+        "value": "com.android.documentsui:id/toolbar"
+      },
+      "constraints": {}
+    },
+    "documentsui.android.current-aura": {
+      "selector": {
+        "kind": "text",
+        "owner_package": "com.android.documentsui",
+        "selector_id": "documentsui.android.current-aura",
+        "value": "AURA"
+      },
+      "constraints": {
+        "class_name": "android.widget.TextView"
+      }
+    },
+    "documentsui.android.use-folder": {
+      "selector": {
+        "kind": "resource_id",
+        "owner_package": "com.android.documentsui",
+        "selector_id": "documentsui.android.use-folder",
+        "value": "android:id/button1"
+      },
+      "constraints": {
+        "text": "SELECT",
+        "clickable": true
+      }
     }
   },
   "timings": {
@@ -446,10 +534,72 @@
     "application_start_settle": 1.0,
     "transition_settle": 0.5,
     "application_return_settle": 1.0,
-    "inventory_probe_interval": 0.25
+    "inventory_probe_interval": 0.25,
+    "export_completion_timeout": 30.0
   },
   "parameters": {
     "inventory_probes": 20,
-    "export_root": "/sdcard/Download/AURA"
+    "export_root": "/sdcard/Download/AURA",
+    "history_max_pages": 1000,
+    "history_scroll_ratio": 0.35,
+    "display_patterns": {
+      "attachment_row": "^([^,]+), (.+), File size: (.+)$",
+      "exported_count": "^(\\d+) notes exported$",
+      "exported_file": "^Notes exported as (.+\\.zip) successfully$",
+      "history_label": "^\\d{2}-\\d{2}-\\d{4} .+ -  .+, .+$",
+      "selection_count": "^(\\d+)(?: items?)? selected$",
+      "word_count": "^(\\d+) words?$"
+    },
+    "display_text": {
+      "synced": "Synced ",
+      "syncing": "Syncing",
+      "sync_failed": "Sync failed ",
+      "offline": "(Offline)",
+      "note_item_prefix": "note-item-",
+      "history_restore": "Restore",
+      "history_delete": "Delete permanently",
+      "created_at": "Created at",
+      "last_edited_at": "Last edited at",
+      "deleted_at": "Deleted at",
+      "trash_restore": "Restore",
+      "trash_delete": "Delete",
+      "history_title": "Note history",
+      "history_empty": "No note history available for this device."
+    },
+    "ui_fields": {
+      "buttons.add": "buttons.add",
+      "listitem.menu": "listitem.menu"
+    },
+    "list_parsing": {
+      "cards": {
+        "row": {
+          "clickable": "true"
+        },
+        "fields": {
+          "resource_id": {
+            "attribute": "resource-id"
+          },
+          "content_description": {
+            "attribute": "content-desc"
+          }
+        },
+        "required": [
+          "content_description"
+        ]
+      },
+      "history": {
+        "row": {
+          "class": "android.view.ViewGroup",
+          "clickable": "true"
+        },
+        "fields": {
+          "label": {
+            "attribute": "content-desc"
+          }
+        }
+      }
+    },
+    "note_open_probes": 6,
+    "note_list_scroll_ratio": 0.2
   }
 }

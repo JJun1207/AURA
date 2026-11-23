@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,6 +9,8 @@ from typing import Any
 
 from .device import COORDINATE_SELECTOR_KEYS
 from .models import Route
+from .parsing import validate_list_parsing
+from .apps.registry import target_contract, PARSER_CONTRACTS, NAMED_PATTERN_FIELDS, LIST_RECORD_CONTRACTS, APPS, COMMON_TIMINGS, APP_TIMINGS
 
 
 class ProfileError(ValueError):
@@ -22,6 +25,8 @@ class AcquisitionTarget:
     acquisition_environments: tuple[str, ...]
     expected_artifacts: tuple[str, ...]
     rules: dict[str, dict[str, Any]] = field(default_factory=dict)
+    remote_access_environments: tuple[str, ...] | None = None
+    environment_rationale: dict[str, str] | None = None
 
     def validate_rules(self) -> None:
         expected = {
@@ -46,28 +51,11 @@ class AcquisitionTarget:
         boundaries = self.rules["traversal_completion"]["parameters"].get("completion_conditions")
         required = self.rules["result"]["parameters"].get("required_artifacts")
         errors = self.rules["error_handling"]["parameters"]
-        if self.target_id == "telegram.account":
-            implemented_boundaries = {"account_profile_verified"}
-        elif self.target_id in {"telegram.conversations", "telegram.attachments"}:
-            implemented_boundaries = {"chat_list_and_histories_exhausted"}
-        elif self.target_id == "chrome.account":
-            implemented_boundaries = {"single_screen_parsed"}
-        elif self.target_id == "chrome.bookmarks":
-            implemented_boundaries = {"recursive_bookmarks_exhausted"}
-        elif self.target_id.startswith(("chrome.", "samsung_browser.")):
-            implemented_boundaries = {"repeated_hierarchy"}
-        elif self.target_id.startswith("google_drive."):
-            implemented_boundaries = {"recursive_listing_exhausted"}
-        elif self.target_id == "notesnook.export":
-            implemented_boundaries = {"export_selection_verified"}
-        elif self.target_id.startswith("notesnook."):
-            implemented_boundaries = {"notes_and_trash_exhausted"}
-        elif self.target_id in {"whatsapp.conversations", "whatsapp.attachments"}:
-            implemented_boundaries = {"chat_history_exhausted", "active_chat_list_exhausted"}
-        elif self.target_id == "whatsapp.chat_export":
-            implemented_boundaries = {"export_target_identified", "active_chat_list_exhausted"}
-        else:
-            implemented_boundaries = {"all_workspaces_visited"}
+        try:
+            contract = target_contract(self.target_id)
+        except ValueError as error:
+            raise ProfileError(str(error)) from error
+        implemented_boundaries = set(contract["boundaries"])
         if (
             not isinstance(counted, list) or not counted
             or not set(counted) <= set(self.item_types)
@@ -93,11 +81,7 @@ class AcquisitionTarget:
                or (name == "ui_observation" and set(kinds) != allowed_kinds[name])
                for name, kinds in required.items()):
             raise ProfileError(f"{self.target_id}: unsupported result rules artifact kinds")
-        implemented_fallbacks = ({"display_fallback": {
-            "conditions": ["save_action_unavailable"],
-            "required_artifacts": ["ui_record", "screen_image", "ui_hierarchy", "audit_record"],
-            "acquisition_status": "partial",
-        }} if self.target_id == "telegram.attachments" else {})
+        implemented_fallbacks = contract["fallbacks"]
         if errors["fallbacks"] != implemented_fallbacks:
             raise ProfileError(f"{self.target_id}: unsupported fallback rules")
 
@@ -199,15 +183,20 @@ class ProfileStore:
             isinstance(key, str)
             and isinstance(value, (int, float))
             and not isinstance(value, bool)
+            and math.isfinite(value)
             and value >= 0
             for key, value in timings_value.items()
         ):
-            raise ProfileError("timings must contain non-negative numbers")
+            raise ProfileError("timings must contain finite non-negative numbers")
+        missing_timings = (COMMON_TIMINGS | APP_TIMINGS.get(app_id, set())) - timings_value.keys()
+        if missing_timings:
+            raise ProfileError(f"{app_id}: missing timings: {', '.join(sorted(missing_timings))}")
 
         parameters_value = document.get("parameters", {})
         if not isinstance(parameters_value, dict):
             raise ProfileError("parameters must be an object")
         self._reject_coordinate_keys(parameters_value)
+        self._validate_parser_parameters(app_id, parameters_value)
 
         android_versions = document.get("android_versions")
         if "android_versions" in document and (
@@ -243,6 +232,19 @@ class ProfileStore:
         acquisition_environments = cls._string_list(value, "acquisition_environments")
         if not set(acquisition_environments) <= {"device_only", "controlled_online"}:
             raise ProfileError("acquisition_environments contain an unknown acquisition_environment")
+        rationale = value.get("environment_rationale")
+        if rationale is not None and (
+            not isinstance(rationale, dict)
+            or set(rationale) != {"device_only", "controlled_online"}
+            or any(not isinstance(reason, str) or not reason.strip() for reason in rationale.values())
+        ):
+            raise ProfileError("environment_rationale must give non-empty reasons for both environments")
+        remote = value.get("remote_access_environments")
+        if remote is not None and (
+            not isinstance(remote, list)
+            or remote != [environment for environment in acquisition_environments if environment == "controlled_online"]
+        ):
+            raise ProfileError("remote_access_environments must declare the controlled_online environment only, when available")
         try:
             method = Route(value.get("method"))
         except (TypeError, ValueError) as error:
@@ -256,8 +258,60 @@ class ProfileStore:
             acquisition_environments=acquisition_environments,
             expected_artifacts=expected_artifacts,
             rules=value.get("rules", {}),
+            remote_access_environments=None if remote is None else tuple(remote),
+            environment_rationale=None if rationale is None else dict(rationale),
         )
         return target
+
+    @staticmethod
+    def _validate_parser_parameters(app_id, parameters):
+        contract = PARSER_CONTRACTS.get(app_id, {})
+        for section in ("ui_fields", "display_text", "display_patterns"):
+            required = set(contract.get(section, ()))
+            if not required and section not in parameters:
+                continue
+            values = parameters.get(section)
+            optional = set(contract.get('optional_ui_fields', ())) if section == 'ui_fields' else set()
+            if (not isinstance(values, dict) or not required <= set(values) <= required | optional
+                    or any(not isinstance(value, str) or not value for value in values.values())):
+                raise ProfileError(f"{app_id}: invalid {section} fields")
+            if section == "display_patterns":
+                for name, expression in values.items():
+                    try:
+                        pattern = re.compile(expression)
+                    except re.error as error:
+                        raise ProfileError(f"{app_id}: invalid display_patterns {name}") from error
+                    if pattern.groups != contract[section][name]:
+                        raise ProfileError(f"{app_id}: display_patterns {name} capture fields mismatch")
+                    if not NAMED_PATTERN_FIELDS.get((app_id, name), set()) <= pattern.groupindex.keys():
+                        raise ProfileError(f"{app_id}: display_patterns {name} named capture fields mismatch")
+        if app_id in LIST_RECORD_CONTRACTS or "list_parsing" in parameters:
+            try:
+                if app_id not in LIST_RECORD_CONTRACTS:
+                    raise ValueError("list_parsing is not implemented for this app")
+                if 'list_parsing' not in parameters:
+                    raise ValueError('list_parsing is required; select an explicit matching version profile for legacy XML')
+                validate_list_parsing(parameters["list_parsing"], LIST_RECORD_CONTRACTS[app_id],
+                                      package_name=APPS[app_id]['package_name'])
+            except ValueError as error:
+                raise ProfileError(f"{app_id}: invalid list_parsing: {error}") from error
+        ratio_key = {"notion": "page_scroll_ratio", "notesnook": "note_list_scroll_ratio"}.get(app_id)
+        ratio_keys = ([ratio_key] if ratio_key else [])
+        if app_id in {"google_drive", "notion"}:
+            ratio_keys.append("menu_scroll_ratio")
+        if app_id == "notion":
+            if parameters.get("page_text_source") not in {"accessibility", "clipboard"}:
+                raise ProfileError("notion: invalid or missing page_text_source")
+            if parameters["page_text_source"] == "clipboard":
+                ratio_keys.extend(("copy_menu_refresh_ratio", "page_discovery_scroll_ratio"))
+        for ratio_key in ratio_keys:
+            ratio = parameters.get(ratio_key)
+            if type(ratio) not in (int, float) or not 0 < ratio <= 1:
+                raise ProfileError(f"{app_id}: invalid or missing {ratio_key}")
+        if "export_attempts" in parameters:
+            value = parameters["export_attempts"]
+            if app_id != "whatsapp" or type(value) is not int or not 1 <= value <= 5:
+                raise ProfileError("invalid export_attempts")
 
     def load_system_ui(self, name: str) -> SystemUIProfile:
         (safe_name,) = self._safe_segments(name)
