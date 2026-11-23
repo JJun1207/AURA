@@ -1,0 +1,228 @@
+{
+  "basis_type": "research_device_owner_instruction",
+  "reference": "",
+  "scope": "Research evaluation; full profile targets for the selected seven apps, with WhatsApp Export only. Review and confirm the scope for your device before use.",
+  "confirmed_by": "",
+  "confirmed_at": "",
+  "remote_acquisition": "unconfirmed",
+  "grants": [
+    {
+      "app_id": "chrome",
+      "profile_app_version": "156.0.8078.79",
+      "profile_sha256": "57758ca9a6a4d36d2cca6439bcf3b67c763893ec68e28fbdede57f00ff1164bf",
+      "method": "materialize",
+      "acquisition_environment": "device_only",
+      "target_ids": [
+        "chrome.account",
+        "chrome.history",
+        "chrome.downloads",
+        "chrome.bookmarks",
+        "chrome.recent_tabs"
+      ],
+      "scope_matches_profile": false
+    },
+    {
+      "app_id": "google_drive",
+      "profile_app_version": "2.26.437.0.all.alldpi",
+      "profile_sha256": "6322dbefe2fc61e8da403fe5b7dfb5c6ab98ec9c825e8417ff950857ddb94ff1",
+      "method": "materialize",
+      "acquisition_environment": "device_only",
+      "target_ids": [
+        "google_drive.inventory"
+      ],
+      "scope_matches_profile": false
+    },
+    {
+      "app_id": "notesnook",
+      "profile_app_version": "3.4.15",
+      "profile_sha256": "2959453c7fe21705b60a152250eb4596b47e64afffe3b461abd59caff058804e",
+      "method": "materialize",
+      "acquisition_environment": "device_only",
+      "target_ids": [
+        "notesnook.notes",
+        "notesnook.attachments"
+      ],
+      "scope_matches_profile": false
+    },
+    {
+      "app_id": "notesnook",
+      "profile_app_version": "3.4.15",
+      "profile_sha256": "2959453c7fe21705b60a152250eb4596b47e64afffe3b461abd59caff058804e",
+      "method": "export",
+      "acquisition_environment": "device_only",
+      "target_ids": [
+        "notesnook.export"
+      ],
+      "scope_matches_profile": false
+    },
+    {
+      "app_id": "notion",
+      "profile_app_version": "0.6.4280",
+      "profile_sha256": "1c72563e8f47b39e773ef15f108d81f07f20b3517ba697c6a9c93f595d89438c",
+      "method": "materialize",
+      "acquisition_environment": "device_only",
+      "target_ids": [
+        "notion.inventory"
+      ],
+      "scope_matches_profile": false
+    },
+    {
+      "app_id": "samsung_browser",
+      "profile_app_version": "30.0.5.27",
+      "profile_sha256": "f03df68679ad9784317c73b89efcb5a235a0cc7e350eb662ca6333c9334ec915",
+      "method": "materialize",
+      "acquisition_environment": "device_only",
+      "target_ids": [
+        "samsung_browser.history",
+        "samsung_browser.downloads",
+        "samsung_browser.saved_pages",
+        "samsung_browser.bookmarks"
+      ],
+      "scope_matches_profile": false
+    },
+    {
+      "app_id": "telegram",
+      "profile_app_version": "13.1.1",
+      "profile_sha256": "cf645420d1181c6e055534a289a2d408ed694f6158646520dfa38d21633b5f92",
+      "method": "materialize",
+      "acquisition_environment": "device_only",
+      "target_ids": [
+        "telegram.account",
+        "telegram.conversations",
+        "telegram.attachments"
+      ],
+      "scope_matches_profile": false
+    },
+    {
+      "app_id": "whatsapp",
+      "profile_app_version": "2.26.43.74",
+      "profile_sha256": "b3e0abf6ad9a75e19f7d0f08cd5f21637860763aa2e2fb273fdc91310b46bafb",
+      "method": "export",
+      "acquisition_environment": "device_only",
+      "target_ids": [
+        "whatsapp.chat_export",
+        "whatsapp.export_summary"
+      ],
+      "scope_matches_profile": false
+    },
+    {
+      "app_id": "chrome",
+      "profile_app_version": "156.0.8078.79",
+      "profile_sha256": "57758ca9a6a4d36d2cca6439bcf3b67c763893ec68e28fbdede57f00ff1164bf",
+      "method": "materialize",
+      "acquisition_environment": "controlled_online",
+      "target_ids": [
+        "chrome.account",
+        "chrome.history",
+        "chrome.downloads",
+        "chrome.bookmarks",
+        "chrome.recent_tabs"
+      ],
+      "scope_matches_profile": false
+    },
+    {
+      "app_id": "google_drive",
+      "profile_app_version": "2.26.437.0.all.alldpi",
+      "profile_sha256": "6322dbefe2fc61e8da403fe5b7dfb5c6ab98ec9c825e8417ff950857ddb94ff1",
+      "method": "materialize",
+      "acquisition_environment": "controlled_online",
+      "target_ids": [
+        "google_drive.inventory",
+        "google_drive.activity",
+        "google_drive.files"
+      ],
+      "scope_matches_profile": false
+    },
+    {
+      "app_id": "notesnook",
+      "profile_app_version": "3.4.15",
+      "profile_sha256": "2959453c7fe21705b60a152250eb4596b47e64afffe3b461abd59caff058804e",
+      "method": "materialize",
+      "acquisition_environment": "controlled_online",
+      "target_ids": [
+        "notesnook.notes",
+        "notesnook.attachments"
+      ],
+      "scope_matches_profile": false
+    },
+    {
+      "app_id": "notesnook",
+      "profile_app_version": "3.4.15",
+      "profile_sha256": "2959453c7fe21705b60a152250eb4596b47e64afffe3b461abd59caff058804e",
+      "method": "export",
+      "acquisition_environment": "controlled_online",
+      "target_ids": [
+        "notesnook.export"
+      ],
+      "scope_matches_profile": false
+    },
+    {
+      "app_id": "notion",
+      "profile_app_version": "0.6.4280",
+      "profile_sha256": "1c72563e8f47b39e773ef15f108d81f07f20b3517ba697c6a9c93f595d89438c",
+      "method": "materialize",
+      "acquisition_environment": "controlled_online",
+      "target_ids": [
+        "notion.inventory",
+        "notion.members",
+        "notion.content",
+        "notion.attachments"
+      ],
+      "scope_matches_profile": false
+    },
+    {
+      "app_id": "notion",
+      "profile_app_version": "0.6.4280",
+      "profile_sha256": "1c72563e8f47b39e773ef15f108d81f07f20b3517ba697c6a9c93f595d89438c",
+      "method": "export",
+      "acquisition_environment": "controlled_online",
+      "target_ids": [
+        "notion.export"
+      ],
+      "scope_matches_profile": false
+    },
+    {
+      "app_id": "samsung_browser",
+      "profile_app_version": "30.0.5.27",
+      "profile_sha256": "f03df68679ad9784317c73b89efcb5a235a0cc7e350eb662ca6333c9334ec915",
+      "method": "materialize",
+      "acquisition_environment": "controlled_online",
+      "target_ids": [
+        "samsung_browser.history",
+        "samsung_browser.downloads",
+        "samsung_browser.saved_pages",
+        "samsung_browser.bookmarks"
+      ],
+      "scope_matches_profile": false
+    },
+    {
+      "app_id": "telegram",
+      "profile_app_version": "13.1.1",
+      "profile_sha256": "cf645420d1181c6e055534a289a2d408ed694f6158646520dfa38d21633b5f92",
+      "method": "materialize",
+      "acquisition_environment": "controlled_online",
+      "target_ids": [
+        "telegram.account",
+        "telegram.conversations",
+        "telegram.attachments"
+      ],
+      "scope_matches_profile": false
+    },
+    {
+      "app_id": "whatsapp",
+      "profile_app_version": "2.26.43.74",
+      "profile_sha256": "b3e0abf6ad9a75e19f7d0f08cd5f21637860763aa2e2fb273fdc91310b46bafb",
+      "method": "export",
+      "acquisition_environment": "controlled_online",
+      "target_ids": [
+        "whatsapp.chat_export",
+        "whatsapp.export_summary"
+      ],
+      "scope_matches_profile": false
+    }
+  ],
+  "network_control": {
+    "external_traffic_restriction": "not_reported",
+    "reference": ""
+  }
+}

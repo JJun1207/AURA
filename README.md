@@ -1,248 +1,197 @@
-# 📱 AURA
+<h1 align="center">
+  <img src="docs/assets/aura-banner.svg" width="1080" alt="AURA — an Android UI item linked to a file and its acquisition record">
+</h1>
+<p align="center">
+  <strong>Acquisition through User Interfaces with Reviewable Artifacts and Outcomes</strong><br>
+  <em>Forensic Science International: Digital Investigation</em>
+</p>
+<p align="center">
+  <a href="#evaluation-dataset">Evaluation data</a> ·
+  <a href="#quick-start">Run AURA</a> ·
+  <a href="#supported-apps">Supported apps</a> ·
+  <a href="#results">Review results</a> ·
+  <a href="#citation">Cite</a> · <a href="#license">License</a>
+</p>
 
-**UI-based Android data acquisition with reviewable records**
+AURA acquires data through Android app interfaces using profiles matched to the installed app version. It records both whether a procedure completed and what it acquired. A reviewer can trace a saved file back to its source or use the recorded UI actions and screen evidence to explain a partial result.
 
-*Acquisition through User Interfaces with Reviewable Artifacts and Outcomes*
+## Evaluation dataset
 
-AURA is a research tool for acquiring application data through the UI of an authorized, unlocked Android device. Application-version profiles guide acquisition, while UI actions, screenshots, UI XML, acquired files and non-acquisition reasons are preserved for later review.
+**228**&nbsp;runs · **76**&nbsp;configurations · **7**&nbsp;apps · **4**&nbsp;devices
 
-[Quick start](#quick-start) · [Supported apps](#supported-apps) · [Profiles](profiles/README.md) · [Results](#results) · [Validation](#validation) · [Tests](#tests) · [Citation](#citation) · [License](#license)
+Each configuration combined a device, app, method, and acquisition environment. Across three repetitions, all reported item counts matched in 71 of the 76 configurations. The devices were the Galaxy S21, Galaxy S8, Pixel 5, and Huawei P30 Lite.
 
-> ⚠️ **Acquisition changes device state.** AURA starts with airplane mode ON, Wi-Fi OFF and Do Not Disturb ON. Planned online acquisition enables Wi-Fi. These settings are **not restored** when the session ends, including after an error or interruption. Use only devices and data you are authorized to examine.
+| Download | Use it to |
+| --- | --- |
+| [**Run&nbsp;summaries**](public-evaluation/runs.csv) | Compare run conditions, duration, storage, and target and procedure outcomes. |
+| [**Item counts**](public-evaluation/item-counts.csv) | Reproduce Table 8 using `reported_count`. Join to the run summaries on `run_id`. |
 
-<a id="quick-start"></a>
+The [dataset guide](public-evaluation/README.md) defines the columns and explains the five Telegram counts that differ between the archived worksheet and the published table. The public CSVs are de-identified. Original chats, page contents, and attachments remain private.
 
-## 🚀 Quick start
+## Quick start
 
-### 1. Prepare the host and device
+### 1. Connect and inspect the device
 
-You need Python **3.13 or newer** (tested with 3.13), ADB, and exactly one connected Android device. Enable USB debugging, authorize the host's ADB key, unlock the device, and sign in to the target applications before acquisition.
+For live acquisition, use **Python 3.13 or newer**, Android Debug Bridge (ADB), and an unlocked device you are authorized to examine. Enable USB debugging, authorize the host’s ADB connection, and sign in to the target app if it requires an account. The target UI must expose the elements needed to identify the data and permit screenshots. [Windows setup and Bluetooth receiver instructions (Korean)](START-WINDOWS-KO.md)
 
-From the repository root, install AURA and its runtime dependencies:
+From the repository root, install AURA in a Python environment and check which installed app versions have matching profiles. If more than one device is connected, add `--serial DEVICE_SERIAL` to each AURA command.
 
 ```bash
 python3 -m pip install -e .
 adb devices -l
-```
-
-Keep the repository's `profiles/` directory alongside the source and run the commands below from the repository root.
-
-### 2. Check the installed applications
-
-```bash
 python3 -m aura inspect
 ```
 
-This reports the connected device, selected System UI profile, installed application versions and profile matches without starting acquisition. Check the target applications before proceeding.
+`inspect` uses read-only ADB queries. An `exact` match means the installed app version has an eligible profile. A `nearest` match identifies a candidate to inspect, and `no_profile` means no eligible profile was found. Live acquisition requires an exact match.
 
-- **`exact`** — an eligible profile matches the installed app version.
-- **`nearest`** — an eligible nearby-version profile was selected; verify its UI compatibility separately.
-- **`no_profile`** — no eligible profile is available for that application.
+### 2. Choose a scope and acquire
 
-### 3. Acquire data
-
-Start with one application:
+If Chrome has an exact match, try a device-only session. During `configure`, select the scope and confirm the authorization details. This writes a new configuration file. The second command starts acquisition.
 
 ```bash
-python3 -m aura acquire telegram
+python3 -m aura configure chrome --environment device_only --output chrome-config.json
+python3 -m aura acquire chrome --config chrome-config.json
 ```
-
-Or select several applications for the same session:
-
-```bash
-python3 -m aura acquire telegram notion google_drive
-```
-
-The selected profiles determine the acquisition methods and environments. AURA finishes the planned device-only work before proceeding to planned online work.
-
-> **WhatsApp Export:** selecting `whatsapp` also schedules the Export method in its profile. Prepare Bluetooth pairing and file reception on the analysis computer before running it. See [Bluetooth export delivery](#bluetooth-export) for the transfer path and environment requirements.
 
 <details>
-<summary>Windows Bluetooth receiver dependency</summary>
+<summary><strong>Configure a session with several apps</strong></summary>
 
-Install the optional Windows dependency when using the Windows Bluetooth File Transfer receiver:
+Pass the same app identifiers to both commands. Select the methods and environments you intend to run during configuration. Use a new output filename if a configuration already exists, and regenerate it if an app profile changes. [Example session configuration](docs/examples/session-config.example.json)
 
 ```bash
-python3 -m pip install -e ".[windows]"
+python3 -m aura configure telegram notion google_drive --output multi-app-config.json
+python3 -m aura acquire telegram notion google_drive --config multi-app-config.json
 ```
-
-Ensure the receiver is paired, discoverable as required for the transfer, and ready to receive files.
 
 </details>
 
-Do not operate the phone manually or change its network state while acquisition is running.
+### Acquisition flow
 
-<a id="supported-apps"></a>
+AURA finishes the planned **device-only** runs with airplane mode and Do Not Disturb enabled and Wi-Fi disabled. If **controlled-online** acquisition is selected, AURA then enables Wi-Fi, checks the connection, and records the SSID when available. The examiner manages any traffic restrictions at the access point.
 
-## 🧩 Supported applications
+At session end, including after an interruption, AURA attempts to restore Wi-Fi and notification settings and records the result. Airplane mode retains its final setting.
 
-**Materialize** records UI-displayed information and acquires individual files through the application's save or download controls. **Export** uses the application's own export or backup function to obtain its output.
+### Sequential repetitions
 
-| Application | CLI identifier | Methods | Acquisition scope |
+To repeat the same configuration three times on the connected device, run the command below. Each repetition produces a separate session. [Repetition guide (Korean)](docs/aura-repetitions-ko.md)
+
+```bash
+python3 tools/run_aura_repetitions.py chrome --config chrome-config.json --count 3
+```
+
+## Supported apps
+
+**Materialize** reads information shown in the UI and uses app controls to save individual files where available. **Export** acquires the output of the app’s own export or backup function.
+
+| App | CLI identifier | Methods | Data covered |
 | --- | --- | --- | --- |
-| Telegram | `telegram` | Materialize | Account information, chats, messages, media and files |
-| WhatsApp | `whatsapp` | Materialize, Export | Chats, messages, media and chat exports |
-| Notion | `notion` | Materialize, Export | Accounts, workspaces, pages, database entries, attachments and exports |
-| Notesnook | `notesnook` | Materialize, Export | Notes, revisions, attachments, trash and note exports |
-| Google Chrome | `chrome` | Materialize | Account information, history, download entries, bookmarks and recent tabs |
-| Samsung Browser | `samsung_browser` | Materialize | History, download entries, saved-page entries and bookmarks |
-| Google Drive | `google_drive` | Materialize | My Drive folders, file information, activity and downloadable files |
+| Telegram | `telegram` | Materialize | Account information, chats, messages, media, and files |
+| WhatsApp | `whatsapp` | Materialize, Export | Chats, messages, media, and chat exports |
+| Notion | `notion` | Materialize, Export | Account and workspace information, pages, database entries, attachments, and exports |
+| Notesnook | `notesnook` | Materialize, Export | Notes, revisions, attachments, trash, and exports |
+| Google Chrome | `chrome` | Materialize | Account information, history, download-list entries, bookmarks, and recent tabs |
+| Samsung Internet | `samsung_browser` (or `sbrowser`) | Materialize | History, download-list entries, saved-page entries, and bookmarks |
+| Google Drive | `google_drive` | Materialize | My Drive folders, file metadata, activity, and downloadable files |
 
-WhatsApp document information is retained with message records; document originals are outside its Materialize scope. Browser download entries are list records, not a claim that the corresponding original files were acquired. Google Drive collects inventory and metadata device-only, then adds activity and file downloads online.
-
-See the [profile catalogue](profiles/README.md#catalogue) for exact app versions and Android constraints. An available profile does not by itself establish compatibility with every device or UI state.
-
-<a id="acquisition-flow"></a>
-
-## ⚙️ Acquisition flow
-
-UI actions and evidence are recorded throughout the session.
-
-1. **Prepare:** record the initial device state and verify airplane mode ON, Wi-Fi OFF and Do Not Disturb ON.
-2. **Plan:** identify installed applications, select profiles and build the execution plan.
-3. **Acquire device-only:** perform the planned procedures, check their results and package each run.
-4. **Acquire online when planned:** retain airplane mode and Do Not Disturb, enable Wi-Fi, verify connectivity and execute the online procedures.
-5. **Finalize:** record the final device state and preserve the session record and its hash without restoring settings.
-
-Online acquisition is planned work, not an automatic retry triggered by an individual item's failure. AURA controls device connectivity but does not configure an AP or restrict traffic to application-specific servers. Application data and cache changes are not reversed.
-
-If acquisition stops early, completed packages and the interruption point remain recorded. If the final state cannot be read, AURA records that failure separately from the last confirmed state.
-
-<a id="bluetooth-export"></a>
-
-### WhatsApp Export: Bluetooth delivery
-
-WhatsApp exports are sent through Android's share interface to the configured, paired analysis computer over Bluetooth. AURA checks the paired receiver, records Bluetooth preparation and receiver selection, waits for a received file to stabilize, and preserves it with the acquisition records. Bluetooth state is restored after the transfer run; this is separate from the session's airplane-mode, Wi-Fi and Do Not Disturb settings, which remain unchanged at session end.
-
-Here, **device-only** means external server access is blocked, not that all local transfer channels are disabled. For a device-only export, keep Wi-Fi and cellular connectivity disabled, use the intended analysis computer as the receiver, and keep Bluetooth tethering disabled. AURA selects the configured receiver but does not implement Bluetooth traffic filtering or verify that tethering is disabled. Treat the Bluetooth transfer as an explicit part of the acquisition procedure and review its recorded actions and results.
-
-<a id="results"></a>
-
-## 📦 Results and records
-
-Each executed application–method–environment combination has its own run identifier and package:
-
-```text
-runs/
-├── <run-id>/
-│   ├── acquisition.json
-│   ├── events.jsonl
-│   └── artifacts/
-├── <run-id>.zip
-├── <run-id>.zip.sha256
-└── sessions/<session-id>/
-    ├── session.json
-    └── session.sha256
-```
-
-| Record | What it preserves |
-| --- | --- |
-| `session.json` | Device and app versions, profile selection, execution order, environment transitions, run-package references and final state |
-| `acquisition.json` | Selected profile, target-identification records, items, timed attempts, procedure/acquisition states and evidence references |
-| `events.jsonl` | Chronological UI actions and evidence-retention events |
-| `artifacts/` | UI-extracted records, acquired files, screenshots and UI XML |
-| `files.json` **inside each ZIP** | Paths, sizes and SHA-256 values of every other ZIP member |
-
-**Procedure completion and data acquisition are separate results.** A procedure can finish without acquiring the expected file. An unstarted attempt retains its reason with null acquisition status and null actual start/end times. Screenshots and XML document the UI; they do not establish acquisition of an original file.
-
-The session hash file uses the format `<digest>  session.json\n`. Keep the session files, run ZIPs and their hashes together when preserving or moving an acquisition.
-
-<a id="validation"></a>
-
-## 🔎 Validate and trace
-
-The independent validator uses the Python standard library without importing AURA's acquisition or packaging code.
-
-### Check a session
-
-```bash
-python3 tools/validate_aura_results.py \
-  runs/sessions/<session-id>/session.json
-```
-
-Checks cover session and package hashes, member paths and sizes, profile/record correspondence, identification counts, procedure states and times, and recorded provenance references.
-
-A schema 2 result with `"valid": true` and `"validation_scope": "schema2_record_consistency"` means those integrity and consistency checks passed. It does **not** certify the truth of the recorded content or complete acquisition of every target. Consistent partial or interrupted acquisitions can also pass.
-
-### Review a file or a non-acquisition outcome
-
-```bash
-python3 tools/validate_aura_results.py \
-  runs/sessions/<session-id>/session.json \
-  --run <run-id> --trace artifact-000001
-
-python3 tools/validate_aura_results.py \
-  runs/sessions/<session-id>/session.json \
-  --run <run-id> --trace outcome-000001
-```
-
-Identifiers restart within each run, so include `--run` to avoid ambiguity. The trace returns the recorded item, attempt, action chain and direct observation reference where available. Related screen records can also be inspected through the attempt identifier; an absent direct reference is not replaced by a guessed screen.
+The [app profiles](profiles/apps) define which targets each version can acquire in each environment. The [System UI profiles](profiles/system_ui) handle device settings on Samsung, Huawei EMUI, and Google/generic Android.
 
 <details>
-<summary>Legacy records and bulk-data references</summary>
+<summary><strong>App-specific behavior and device changes</strong></summary>
 
-Schema 1 records are checked under the narrower `legacy_integrity_and_references` scope; they are not treated as schema 2 records. Unsupported schema versions fail validation.
-
-For bulk data, `associated_items` identifies validated row or message bindings while retaining the actual collection attempt. Original JSON files acquired from an app remain user data: arbitrary keys inside them are not interpreted as AURA provenance references.
+- **Google Drive.** The supplied profiles collect listings and basic metadata in both environments. Activity and original file downloads run controlled-online. If a downloaded file could correspond to an earlier request in the same session, AURA preserves it and records the uncertain source as a partial result.
+- **Notion.** Account, workspace, and page listings are available in both environments. Member information, page content, attachments, and exports are assigned to controlled-online acquisition. Profiles that use *Copy page contents* replace the device clipboard.
+- **WhatsApp.** Materialize preserves document details with their messages and excludes document originals. Export uses a Bluetooth receiver. On Windows, run `python3 -m pip install -e ".[windows]"` and follow the [pairing instructions](START-WINDOWS-KO.md).
+- **Browsers.** Download-list entries describe what the browser lists. When adjacent history screens overlap and the matching rows cannot be determined, AURA preserves the rows and flags the uncertainty for review.
 
 </details>
 
-<a id="tests"></a>
+## Results
 
-## 🧪 Tests and validation
+A session records the plan and device state. Each executed app–method–environment combination produces a run package. Keep the session record, run ZIPs, and companion SHA-256 files together.
 
-Install the test dependencies and run the included device-free suite from the repository root:
+| Location | Contents |
+| --- | --- |
+| `runs/sessions/<session-id>/` | `session.json` and its hash. The record identifies the profiles, execution order, device settings, and run packages. |
+| `runs/<run-id>/` | `acquisition.json` links items, attempts, and outcomes. `events.jsonl` records actions over time. `artifacts/` holds acquired data and screen evidence. |
+| `runs/<run-id>.zip` | Packaged run with a `files.json` manifest of member paths, byte sizes, and SHA-256 hashes. The archive hash is in the adjacent `.zip.sha256` file. |
+
+### Validation
+
+Pass `session.json` to the standalone validator to check the package hashes, file sizes, and references between records. For a session with several runs, specify the run as well as the artifact or outcome ID. IDs are local to each run.
+
+```bash
+python3 tools/validate_aura_results.py "runs/sessions/SESSION_ID/session.json" \
+  --run RUN_ID --trace artifact-000001
+```
+
+Replace `SESSION_ID`, `RUN_ID`, and the artifact ID with values from your session. A valid result confirms that the checked files and records are consistent. A partial acquisition can pass this check when the records account for its outcome.
+
+### Try a provenance example
+
+These two synthetic packages were prepared separately from the 228 study runs. Each can be reviewed offline with Python’s standard library or by following the records by hand.
+
+- [Google Drive — trace a saved file](public-evaluation/examples/drive-preserved-file.zip). Follow `sample-note.txt` from the preserved file to its source folder and the action that downloaded it.
+- [Telegram — explain a partial acquisition](public-evaluation/examples/telegram-partial-acquisition.zip). Follow the attachment record to its message and inspect the menu to see why the procedure completed without saving the original video.
+
+<details>
+<summary>View the simulated menus and run the traces</summary>
+
+| Google Drive · File menu | Telegram · Attachment menu |
+| --- | --- |
+| <img src="docs/assets/drive-preserved-file.png" width="340" alt="Simulated Drive menu showing sample-note.txt in Blue folder and the Download action."> | <img src="docs/assets/telegram-partial-acquisition.png" width="340" alt="Simulated Telegram menu for attachment V01 in message M02 offering Reply, Forward, Pin, and Delete."> |
+
+From the repository root, run the commands for the example you want to review.
+
+**Google Drive**
+
+```bash
+python3 -m zipfile -e public-evaluation/examples/drive-preserved-file.zip runs/review-drive
+python3 tools/validate_aura_results.py runs/review-drive/session.json --trace artifact-000003
+```
+
+**Telegram**
+
+```bash
+python3 -m zipfile -e public-evaluation/examples/telegram-partial-acquisition.zip runs/review-telegram
+python3 tools/validate_aura_results.py runs/review-telegram/session.json --trace outcome-000001
+```
+
+</details>
+
+### Tests
 
 ```bash
 python3 -m pip install -e ".[test]"
-python3 -m pytest -q
+python3 -m pytest -q --ignore=tests/test_latex_manuscript.py
+python3 tools/audit_aura_profiles.py
 ```
 
-The **September 13, 2026** check of this distribution passed **787 tests**. The suite covers profiles, collectors, recording, packaging and the independent validator using fake devices and temporary directories. Public fixtures use placeholder personal identifiers and synthetic or reduced UI data; the suite does not operate a connected phone.
+### Repository layout
 
-See the [validation guide](docs/VALIDATION.md) for evaluated device and application configurations, execution outcomes, and the scope of automated checks.
-
-<a id="repository-layout"></a>
-
-## 🗂️ Repository guide
-
-```text
-README.md       Setup, acquisition and result-review guide
-CITATION.cff    Software and manuscript citation metadata
-LICENSE         Apache License 2.0
-pyproject.toml  Package configuration and dependencies
-.gitignore      Exclusions for generated data and local files
-src/aura/       Acquisition runtime, UI control and app collectors
-profiles/       Application-version and manufacturer System UI profiles
-tools/          Independent result validator
-tests/          Device-free tests and regression fixtures
-docs/           Evaluation and validation scope
-```
-
-- [Profile reference](profiles/README.md) — supported versions, fields, selectors and validation.
-- [Validation status](docs/VALIDATION.md) — what was tested and what remains outside that scope.
-
-Acquisition packages can contain sensitive data. Keep generated `runs/` directories and private data out of version control.
+- [Acquisition code](src/aura) and [profile reference](profiles/README.md)
+- [Evaluation runbook (Korean)](docs/aura-poc-evaluation-runbook-ko.md) and [validation history](docs/VALIDATION.md)
+- [Review bundle guide (Korean)](docs/aura-review-bundle-ko.md) for comparing selected sessions
 
 <a id="citation"></a>
 
 ## 📖 Citation
 
-If you use AURA in research, cite the following work and identify the repository revision used.
+If you use AURA in research, please cite the following article and identify the software release or commit you used.
 
 ```bibtex
-@unpublished{Kim2026AURA,
-  author = {Kim, Junki and Park, Jungheum and Lee, Sangjin},
-  title  = {{AURA}: A Framework for {UI}-Based Mobile Data Acquisition and Provenance Review},
-  year   = {2026},
-  note   = {Manuscript submitted to Forensic Science International: Digital Investigation}
+@article{Kim2026AURA,
+  author  = {Kim, Junki and Park, Jungheum and Lee, Sangjin},
+  title   = {{AURA}: A Framework for {UI}-Based Data Acquisition from {Android} Applications with Reviewable Provenance},
+  journal = {Forensic Science International: Digital Investigation},
+  year    = {2026},
+  note    = {Accepted for publication on 21 November 2026}
 }
 ```
 
-Machine-readable software and manuscript metadata are available in [CITATION.cff](CITATION.cff). Source code: [JJun1207/AURA](https://github.com/JJun1207/AURA).
+Machine-readable citation metadata are available in [CITATION.cff](CITATION.cff).
 
 <a id="license"></a>
 
 ## ⚖️ License
 
-AURA is licensed under the [Apache License 2.0](LICENSE). Third-party dependencies remain subject to their respective licenses. This software license does not grant permission to access devices, accounts or data without authorization.
+The AURA source code is licensed under the [Apache License 2.0](LICENSE). Third-party dependencies are governed by their respective licenses. Access to devices, accounts, and data requires separate authorization.

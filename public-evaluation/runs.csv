@@ -1,0 +1,229 @@
+run_id,device,android_version,application,application_version,method,environment,repetition,logged_run_status,elapsed_seconds,acquired_data_bytes,screen_evidence_bytes,other_record_bytes,total_bytes,logged_procedure_completed,logged_procedure_interrupted,logged_procedure_not_attempted,reported_targets_expected,reported_targets_identified,reported_targets_acquired,reported_targets_partial,reported_targets_not_acquired,reported_targets_not_attempted,reported_targets_assessed_via_list_or_chat,reported_procedures_completed,reported_procedures_interrupted,reported_procedures_not_attempted
+R001,Galaxy S21,14,Google Chrome,156.0.8078.79,materialize,device_only,1,complete,97.263166,17381,15120599,662725,15800705,5,0,0,58,58,,,,,58,5,0,0
+R002,Galaxy S21,14,Samsung Internet,30.0.5.27,materialize,device_only,1,complete,55.070099,10335,17324496,444849,17779680,4,0,0,56,56,,,,,56,4,0,0
+R003,Galaxy S21,14,Google Drive,2.26.437.0.all.alldpi,materialize,device_only,1,partial,223.004201,44088,33337522,2082176,35463786,35,0,0,34,34,34,0,0,0,0,35,0,0
+R004,Galaxy S21,14,Notesnook,3.4.15,materialize,device_only,1,complete,449.962065,323649,55390165,3730705,59444519,45,0,0,44,44,44,0,0,0,0,45,0,0
+R005,Galaxy S21,14,Notesnook,3.4.15,export,device_only,1,complete,24.528145,228836,770176,142859,1141871,2,0,0,1,1,1,0,0,0,0,1,0,0
+R006,Galaxy S21,14,Telegram,13.1.1,materialize,device_only,1,complete,595.392978,33535142,425610388,7137530,466283060,40,0,0,174,174,39,0,0,0,135,40,0,0
+R007,Galaxy S21,14,Notion,0.6.4280,materialize,device_only,1,complete,77.998606,10109,1382115,259176,1651400,4,0,0,10,10,3,0,0,0,7,4,0,0
+R008,Galaxy S21,14,WhatsApp,2.26.43.74,materialize,device_only,1,partial,216.905382,12602218,88150065,2422978,103175261,106,0,0,101,101,101,0,0,0,0,106,0,0
+R009,Galaxy S21,14,WhatsApp,2.26.43.74,export,device_only,1,complete,143.408048,14471304,4873661,443094,19788059,4,0,0,3,3,3,0,0,0,0,4,0,0
+R010,Galaxy S21,14,Google Chrome,156.0.8078.79,materialize,controlled_online,1,complete,96.860806,17438,15365243,668437,16051118,5,0,0,58,58,,,,,58,5,0,0
+R011,Galaxy S21,14,Samsung Internet,30.0.5.27,materialize,controlled_online,1,complete,55.947349,10335,17524082,448461,17982878,4,0,0,56,56,,,,,56,4,0,0
+R012,Galaxy S21,14,Google Drive,2.26.437.0.all.alldpi,materialize,controlled_online,1,partial,593.227192,1857605,75760344,4951317,82569266,94,0,0,93,93,93,0,0,0,0,94,0,0
+R013,Galaxy S21,14,Notesnook,3.4.15,materialize,controlled_online,1,complete,459.241468,323641,56171317,3764723,60259681,45,0,0,44,44,44,0,0,0,0,45,0,0
+R014,Galaxy S21,14,Notesnook,3.4.15,export,controlled_online,1,complete,25.929805,228827,768657,144104,1141588,2,0,0,1,1,1,0,0,0,0,1,0,0
+R015,Galaxy S21,14,Telegram,13.1.1,materialize,controlled_online,1,complete,552.175484,33537947,434087513,7176615,474802075,40,0,0,174,174,39,0,0,0,135,40,0,0
+R016,Galaxy S21,14,Notion,0.6.4280,materialize,controlled_online,1,complete,672.612159,410196,143280974,5463509,149154679,34,0,0,29,29,29,0,0,0,0,34,0,0
+R017,Galaxy S21,14,Notion,0.6.4280,export,controlled_online,1,complete,239.577967,82391,8118916,1034537,9235844,11,3,0,7,7,7,0,0,0,0,7,0,0
+R018,Galaxy S21,14,WhatsApp,2.26.43.74,materialize,controlled_online,1,partial,225.058088,12602320,88799931,2445877,103848128,106,0,0,101,101,101,0,0,0,0,106,0,0
+R019,Galaxy S21,14,WhatsApp,2.26.43.74,export,controlled_online,1,complete,142.858248,14471304,4925809,446125,19843238,4,0,0,3,3,3,0,0,0,0,4,0,0
+R020,Galaxy S21,14,Google Chrome,156.0.8078.79,materialize,device_only,2,complete,97.120009,17438,15112817,662725,15792980,5,0,0,58,58,,,,,58,5,0,0
+R021,Galaxy S21,14,Samsung Internet,30.0.5.27,materialize,device_only,2,complete,55.906429,10335,17415650,444849,17870834,4,0,0,56,56,,,,,56,4,0,0
+R022,Galaxy S21,14,Google Drive,2.26.437.0.all.alldpi,materialize,device_only,2,partial,222.596053,44088,34075868,2082186,36202142,35,0,0,34,34,34,0,0,0,0,35,0,0
+R023,Galaxy S21,14,Notesnook,3.4.15,materialize,device_only,2,complete,450.571246,323649,55362399,3730705,59416753,45,0,0,44,44,44,0,0,0,0,45,0,0
+R024,Galaxy S21,14,Notesnook,3.4.15,export,device_only,2,complete,25.009779,228836,772485,142859,1144180,2,0,0,1,1,1,0,0,0,0,1,0,0
+R025,Galaxy S21,14,Telegram,13.1.1,materialize,device_only,2,complete,577.740025,33534936,425964358,7137525,466636819,40,0,0,174,174,39,0,0,0,135,40,0,0
+R026,Galaxy S21,14,Notion,0.6.4280,materialize,device_only,2,complete,74.965843,10109,1416208,259176,1685493,4,0,0,10,10,3,0,0,0,7,4,0,0
+R027,Galaxy S21,14,WhatsApp,2.26.43.74,materialize,device_only,2,partial,217.944317,12602209,87953087,2422964,102978260,106,0,0,101,101,101,0,0,0,0,106,0,0
+R028,Galaxy S21,14,WhatsApp,2.26.43.74,export,device_only,2,complete,140.188711,14471304,4872585,443092,19786981,4,0,0,3,3,3,0,0,0,0,4,0,0
+R029,Galaxy S21,14,Google Chrome,156.0.8078.79,materialize,controlled_online,2,complete,97.253778,17438,15493999,668437,16179874,5,0,0,58,58,,,,,58,5,0,0
+R030,Galaxy S21,14,Samsung Internet,30.0.5.27,materialize,controlled_online,2,complete,55.799355,10335,17555189,448461,18013985,4,0,0,56,56,,,,,56,4,0,0
+R031,Galaxy S21,14,Google Drive,2.26.437.0.all.alldpi,materialize,controlled_online,2,partial,570.689248,1857605,76532030,4938141,83327776,94,0,0,93,93,93,0,0,0,0,94,0,0
+R032,Galaxy S21,14,Notesnook,3.4.15,materialize,controlled_online,2,complete,469.625283,323589,56186948,3767743,60278280,45,0,0,44,44,44,0,0,0,0,45,0,0
+R033,Galaxy S21,14,Notesnook,3.4.15,export,controlled_online,2,complete,26.093446,228827,774852,145575,1149254,2,0,0,1,1,1,0,0,0,0,1,0,0
+R034,Galaxy S21,14,Telegram,13.1.1,materialize,controlled_online,2,complete,547.350405,33536746,427521139,7109170,468167055,40,0,0,174,174,39,0,0,0,135,40,0,0
+R035,Galaxy S21,14,Notion,0.6.4280,materialize,controlled_online,2,complete,665.234372,410009,143420281,5463509,149293799,34,0,0,29,29,29,0,0,0,0,34,0,0
+R036,Galaxy S21,14,Notion,0.6.4280,export,controlled_online,2,complete,238.995105,82391,8110549,1034537,9227477,11,3,0,7,7,7,0,0,0,0,7,0,0
+R037,Galaxy S21,14,WhatsApp,2.26.43.74,materialize,controlled_online,2,partial,225.289272,12602338,88786028,2445875,103834241,106,0,0,101,101,101,0,0,0,0,106,0,0
+R038,Galaxy S21,14,WhatsApp,2.26.43.74,export,controlled_online,2,complete,139.729463,14471304,4919827,446116,19837247,4,0,0,3,3,3,0,0,0,0,4,0,0
+R039,Galaxy S21,14,Google Chrome,156.0.8078.79,materialize,device_only,3,complete,97.224552,17381,15167219,662725,15847325,5,0,0,58,58,,,,,58,5,0,0
+R040,Galaxy S21,14,Samsung Internet,30.0.5.27,materialize,device_only,3,complete,55.422827,10335,17484630,444849,17939814,4,0,0,56,56,,,,,56,4,0,0
+R041,Galaxy S21,14,Google Drive,2.26.437.0.all.alldpi,materialize,device_only,3,partial,214.722357,43272,33679270,2082052,35804594,35,0,0,34,34,34,0,0,0,0,35,0,0
+R042,Galaxy S21,14,Notesnook,3.4.15,materialize,device_only,3,complete,442.538682,323650,55486515,3730706,59540871,45,0,0,44,44,44,0,0,0,0,45,0,0
+R043,Galaxy S21,14,Notesnook,3.4.15,export,device_only,3,complete,24.771189,228836,774041,142859,1145736,2,0,0,1,1,1,0,0,0,0,1,0,0
+R044,Galaxy S21,14,Telegram,13.1.1,materialize,device_only,3,complete,574.103216,33532767,427153315,7133032,467819114,40,0,0,174,174,39,0,0,0,135,40,0,0
+R045,Galaxy S21,14,Notion,0.6.4280,materialize,device_only,3,complete,75.186748,10109,1417864,259176,1687149,4,0,0,10,10,3,0,0,0,7,4,0,0
+R046,Galaxy S21,14,WhatsApp,2.26.43.74,materialize,device_only,3,partial,216.572050,12602209,88300463,2426090,103328762,106,0,0,101,101,101,0,0,0,0,106,0,0
+R047,Galaxy S21,14,WhatsApp,2.26.43.74,export,device_only,3,complete,146.270892,14471304,4863811,450062,19785177,4,0,0,3,3,3,0,0,0,0,4,0,0
+R048,Galaxy S21,14,Google Chrome,156.0.8078.79,materialize,controlled_online,3,complete,96.514604,17438,15429765,668437,16115640,5,0,0,58,58,,,,,58,5,0,0
+R049,Galaxy S21,14,Samsung Internet,30.0.5.27,materialize,controlled_online,3,complete,55.504342,10335,17633158,448461,18091954,4,0,0,56,56,,,,,56,4,0,0
+R050,Galaxy S21,14,Google Drive,2.26.437.0.all.alldpi,materialize,controlled_online,3,partial,574.616320,1856653,76206190,4954574,83017417,94,0,0,93,93,93,0,0,0,0,94,0,0
+R051,Galaxy S21,14,Notesnook,3.4.15,materialize,controlled_online,3,complete,463.756960,323641,56119949,3764720,60208310,45,0,0,44,44,44,0,0,0,0,45,0,0
+R052,Galaxy S21,14,Notesnook,3.4.15,export,controlled_online,3,complete,26.308665,228827,773132,144104,1146063,2,0,0,1,1,1,0,0,0,0,1,0,0
+R053,Galaxy S21,14,Telegram,13.1.1,materialize,controlled_online,3,complete,547.680714,33535678,427808574,7109175,468453427,40,0,0,174,174,39,0,0,0,135,40,0,0
+R054,Galaxy S21,14,Notion,0.6.4280,materialize,controlled_online,3,complete,660.237874,410013,143418170,5463509,149291692,34,0,0,29,29,29,0,0,0,0,34,0,0
+R055,Galaxy S21,14,Notion,0.6.4280,export,controlled_online,3,complete,230.099290,82391,8116150,1034537,9233078,11,3,0,7,7,7,0,0,0,0,7,0,0
+R056,Galaxy S21,14,WhatsApp,2.26.43.74,materialize,controlled_online,3,partial,224.289575,12602329,88794727,2445877,103842933,106,0,0,101,101,101,0,0,0,0,106,0,0
+R057,Galaxy S21,14,WhatsApp,2.26.43.74,export,controlled_online,3,complete,142.021230,14471304,4922776,446125,19840205,4,0,0,3,3,3,0,0,0,0,4,0,0
+R058,Galaxy S8,9,Google Chrome,138.0.7204.179,materialize,device_only,1,complete,112.545770,17997,12892546,706514,13617057,5,0,0,58,58,,,,,58,5,0,0
+R059,Galaxy S8,9,Samsung Internet,28.0.5.9,materialize,device_only,1,complete,63.749550,10476,12640715,429201,13080392,4,0,0,56,56,,,,,56,4,0,0
+R060,Galaxy S8,9,Google Drive,2.26.447.0.all.alldpi,materialize,device_only,1,complete,283.781368,36879,25076238,2133735,27246852,35,0,0,34,34,34,0,0,0,0,35,0,0
+R061,Galaxy S8,9,Notesnook,3.4.15,materialize,device_only,1,complete,705.575043,341758,57499174,4221910,62062842,45,0,0,44,44,44,0,0,0,0,45,0,0
+R062,Galaxy S8,9,Notesnook,3.4.15,export,device_only,1,complete,37.118311,225170,836780,155187,1217137,2,0,0,1,1,1,0,0,0,0,1,0,0
+R063,Galaxy S8,9,Telegram,13.2.2,materialize,device_only,1,complete,655.592802,33556940,380822794,7226527,421606261,40,0,0,174,174,39,0,0,0,135,40,0,0
+R064,Galaxy S8,9,Notion,0.6.4304,materialize,device_only,1,complete,88.371337,10109,1269210,259274,1538593,4,0,0,10,10,3,0,0,0,7,4,0,0
+R065,Galaxy S8,9,WhatsApp,2.26.44.90,materialize,device_only,1,partial,216.769192,11745768,82631805,2229143,96606716,103,0,0,101,101,101,0,0,0,0,103,0,0
+R066,Galaxy S8,9,WhatsApp,2.26.44.90,export,device_only,1,complete,248.024107,14428529,3461450,456720,18346699,4,0,0,3,3,3,0,0,0,0,4,0,0
+R067,Galaxy S8,9,Google Chrome,138.0.7204.179,materialize,controlled_online,1,complete,111.862354,17997,13512566,726692,14257255,5,0,0,58,58,,,,,58,5,0,0
+R068,Galaxy S8,9,Samsung Internet,28.0.5.9,materialize,controlled_online,1,complete,64.782425,10476,12685384,432727,13128587,4,0,0,56,56,,,,,56,4,0,0
+R069,Galaxy S8,9,Google Drive,2.26.447.0.all.alldpi,materialize,controlled_online,1,complete,638.850410,1856704,66453653,5080996,73391353,94,0,0,93,93,93,0,0,0,0,94,0,0
+R070,Galaxy S8,9,Notesnook,3.4.15,materialize,controlled_online,1,complete,696.826177,342392,57717747,4282880,62343019,45,0,0,44,44,44,0,0,0,0,45,0,0
+R071,Galaxy S8,9,Notesnook,3.4.15,export,controlled_online,1,complete,38.274502,225161,828189,158088,1211438,2,0,0,1,1,1,0,0,0,0,1,0,0
+R072,Galaxy S8,9,Telegram,13.2.2,materialize,controlled_online,1,complete,651.128537,33556614,379963309,7277659,420797582,40,0,0,174,174,39,0,0,0,135,40,0,0
+R073,Galaxy S8,9,Notion,0.6.4304,materialize,controlled_online,1,complete,926.636472,450466,156469760,6222106,163142332,34,0,0,29,29,28,0,1,0,0,34,0,0
+R074,Galaxy S8,9,Notion,0.6.4304,export,controlled_online,1,complete,261.739449,82367,7058097,1040664,8181128,11,3,0,7,7,7,0,0,0,0,7,0,0
+R075,Galaxy S8,9,WhatsApp,2.26.44.90,materialize,controlled_online,1,partial,221.623443,11745758,84592353,2263531,98601642,103,0,0,101,101,101,0,0,0,0,103,0,0
+R076,Galaxy S8,9,WhatsApp,2.26.44.90,export,controlled_online,1,complete,257.631247,14428529,3509807,459970,18398306,4,0,0,3,3,3,0,0,0,0,4,0,0
+R077,Galaxy S8,9,Google Chrome,138.0.7204.179,materialize,device_only,2,complete,112.324621,17997,12967195,706514,13691706,5,0,0,58,58,,,,,58,5,0,0
+R078,Galaxy S8,9,Samsung Internet,28.0.5.9,materialize,device_only,2,complete,61.078953,10476,12044194,414936,12469606,4,0,0,56,56,,,,,56,4,0,0
+R079,Galaxy S8,9,Google Drive,2.26.447.0.all.alldpi,materialize,device_only,2,complete,271.408389,36879,25070241,2111377,27218497,35,0,0,34,34,34,0,0,0,0,35,0,0
+R080,Galaxy S8,9,Notesnook,3.4.15,materialize,device_only,2,complete,697.257342,341401,56641708,4238244,61221353,45,0,0,44,44,44,0,0,0,0,45,0,0
+R081,Galaxy S8,9,Notesnook,3.4.15,export,device_only,2,complete,37.325252,225170,833453,155187,1213810,2,0,0,1,1,1,0,0,0,0,1,0,0
+R082,Galaxy S8,9,Telegram,13.2.2,materialize,device_only,2,complete,637.175256,33555140,381821950,7224250,422601340,40,0,0,174,174,39,0,0,0,135,40,0,0
+R083,Galaxy S8,9,Notion,0.6.4304,materialize,device_only,2,complete,86.251674,10109,1269304,259274,1538687,4,0,0,10,10,3,0,0,0,7,4,0,0
+R084,Galaxy S8,9,WhatsApp,2.26.44.90,materialize,device_only,2,partial,224.673780,11745768,82645536,2229131,96620435,103,0,0,101,101,101,0,0,0,0,103,0,0
+R085,Galaxy S8,9,WhatsApp,2.26.44.90,export,device_only,2,complete,239.075362,14428529,3491770,456697,18376996,4,0,0,3,3,3,0,0,0,0,4,0,0
+R086,Galaxy S8,9,Google Chrome,138.0.7204.179,materialize,controlled_online,2,complete,112.151013,17997,13482011,726692,14226700,5,0,0,58,58,,,,,58,5,0,0
+R087,Galaxy S8,9,Samsung Internet,28.0.5.9,materialize,controlled_online,2,complete,63.298754,10476,12213798,418336,12642610,4,0,0,56,56,,,,,56,4,0,0
+R088,Galaxy S8,9,Google Drive,2.26.447.0.all.alldpi,materialize,controlled_online,2,complete,645.658651,1856704,66676815,5084332,73617851,94,0,0,93,93,93,0,0,0,0,94,0,0
+R089,Galaxy S8,9,Notesnook,3.4.15,materialize,controlled_online,2,complete,697.833357,342946,57918084,4282885,62543915,45,0,0,44,44,44,0,0,0,0,45,0,0
+R090,Galaxy S8,9,Notesnook,3.4.15,export,controlled_online,2,complete,38.875610,225161,831074,158088,1214323,2,0,0,1,1,1,0,0,0,0,1,0,0
+R091,Galaxy S8,9,Telegram,13.2.2,materialize,controlled_online,2,complete,638.640139,33554975,378159490,7260609,418975074,40,0,0,174,174,39,0,0,0,135,40,0,0
+R092,Galaxy S8,9,Notion,0.6.4304,materialize,controlled_online,2,complete,929.936051,450468,155819759,6193960,162464187,34,0,0,29,29,28,0,1,0,0,34,0,0
+R093,Galaxy S8,9,Notion,0.6.4304,export,controlled_online,2,complete,260.965691,82367,7051422,1043219,8177008,11,3,0,7,7,7,0,0,0,0,7,0,0
+R094,Galaxy S8,9,WhatsApp,2.26.44.90,materialize,controlled_online,2,partial,231.257081,11745748,84653676,2263518,98662942,103,0,0,101,101,101,0,0,0,0,103,0,0
+R095,Galaxy S8,9,WhatsApp,2.26.44.90,export,controlled_online,2,complete,241.057621,14428529,3481293,459970,18369792,4,0,0,3,3,3,0,0,0,0,4,0,0
+R096,Galaxy S8,9,Google Chrome,138.0.7204.179,materialize,device_only,3,complete,113.656370,17997,13473899,720416,14212312,5,0,0,58,58,,,,,58,5,0,0
+R097,Galaxy S8,9,Samsung Internet,28.0.5.9,materialize,device_only,3,complete,62.308217,10476,12791461,429181,13231118,4,0,0,56,56,,,,,56,4,0,0
+R098,Galaxy S8,9,Google Drive,2.26.447.0.all.alldpi,materialize,device_only,3,complete,281.070662,36879,25074039,2127347,27238265,35,0,0,34,34,34,0,0,0,0,35,0,0
+R099,Galaxy S8,9,Notesnook,3.4.15,materialize,device_only,3,complete,703.382092,342947,57967957,4242858,62553762,45,0,0,44,44,44,0,0,0,0,45,0,0
+R100,Galaxy S8,9,Notesnook,3.4.15,export,device_only,3,complete,37.169734,225170,837700,155187,1218057,2,0,0,1,1,1,0,0,0,0,1,0,0
+R101,Galaxy S8,9,Telegram,13.2.2,materialize,device_only,3,complete,643.698643,33552894,379829002,7216463,420598359,40,0,0,174,174,39,0,0,0,135,40,0,0
+R102,Galaxy S8,9,Notion,0.6.4304,materialize,device_only,3,complete,86.447348,10109,1269304,259274,1538687,4,0,0,10,10,3,0,0,0,7,4,0,0
+R103,Galaxy S8,9,WhatsApp,2.26.44.90,materialize,device_only,3,partial,229.217700,11745786,82579265,2229166,96554217,103,0,0,101,101,101,0,0,0,0,103,0,0
+R104,Galaxy S8,9,WhatsApp,2.26.44.90,export,device_only,3,complete,244.861614,14428529,3462921,456684,18348134,4,0,0,3,3,3,0,0,0,0,4,0,0
+R105,Galaxy S8,9,Google Chrome,138.0.7204.179,materialize,controlled_online,3,complete,111.921567,17940,13567664,726692,14312296,5,0,0,58,58,,,,,58,5,0,0
+R106,Galaxy S8,9,Samsung Internet,28.0.5.9,materialize,controlled_online,3,complete,63.039824,10476,12079371,418356,12508203,4,0,0,56,56,,,,,56,4,0,0
+R107,Galaxy S8,9,Google Drive,2.26.447.0.all.alldpi,materialize,controlled_online,3,complete,638.980692,1856704,66757905,5067444,73682053,94,0,0,93,93,93,0,0,0,0,94,0,0
+R108,Galaxy S8,9,Notesnook,3.4.15,materialize,controlled_online,3,complete,682.915100,342192,57483495,4235981,62061668,45,0,0,44,44,44,0,0,0,0,45,0,0
+R109,Galaxy S8,9,Notesnook,3.4.15,export,controlled_online,3,complete,37.793193,225171,838686,158098,1221955,2,0,0,1,1,1,0,0,0,0,1,0,0
+R110,Galaxy S8,9,Telegram,13.2.2,materialize,controlled_online,3,complete,655.451331,33558618,380842939,7285659,421687216,40,0,0,174,174,39,0,0,0,135,40,0,0
+R111,Galaxy S8,9,Notion,0.6.4304,materialize,controlled_online,3,complete,935.158765,449629,156617627,6209680,163276936,34,0,0,29,29,28,0,1,0,0,34,0,0
+R112,Galaxy S8,9,Notion,0.6.4304,export,controlled_online,3,complete,257.663865,82382,7053206,1040659,8176247,11,3,0,7,7,7,0,0,0,0,7,0,0
+R113,Galaxy S8,9,WhatsApp,2.26.44.90,materialize,controlled_online,3,partial,232.768452,11745784,82951957,2247204,96944945,103,0,0,101,101,101,0,0,0,0,103,0,0
+R114,Galaxy S8,9,WhatsApp,2.26.44.90,export,controlled_online,3,complete,241.895000,14428529,3472056,459963,18360548,4,0,0,3,3,3,0,0,0,0,4,0,0
+R115,Pixel 5,14,Google Chrome,157.0.8103.48,materialize,device_only,1,complete,101.358700,14448,15547723,630884,16193055,5,0,0,58,58,,,,,58,5,0,0
+R116,Pixel 5,14,Samsung Internet,30.0.5.27,materialize,device_only,1,complete,49.091277,7904,11990543,352346,12350793,4,0,0,56,56,,,,,56,4,0,0
+R117,Pixel 5,14,Google Drive,2.26.297.3.all.alldpi,materialize,device_only,1,complete,242.651188,36897,26746356,2109169,28892422,35,0,0,34,34,34,0,0,0,0,35,0,0
+R118,Pixel 5,14,Notesnook,3.4.15,materialize,device_only,1,partial,620.123254,93271,63712433,4104692,67910396,45,0,0,44,44,40,0,4,0,0,45,0,0
+R119,Pixel 5,14,Notesnook,3.4.15,export,device_only,1,complete,28.682613,12392,884370,141710,1038472,2,0,0,1,1,1,0,0,0,0,1,0,0
+R120,Pixel 5,14,Telegram,12.9.2,materialize,device_only,1,partial,713.889245,11120823,376875423,6939725,394935971,38,0,0,174,174,10,29,0,0,135,38,0,0
+R121,Pixel 5,14,Notion,0.6.4304,materialize,device_only,1,complete,79.287415,10088,1230681,256159,1496928,4,0,0,10,10,3,0,0,0,7,4,0,0
+R122,Pixel 5,14,WhatsApp,2.26.44.90,materialize,device_only,1,partial,202.000143,11745963,78771632,2214994,92732589,103,0,0,101,101,101,0,0,0,0,103,0,0
+R123,Pixel 5,14,WhatsApp,2.26.44.90,export,device_only,1,complete,138.398306,14428557,3338703,445194,18212454,4,0,0,3,3,3,0,0,0,0,4,0,0
+R124,Pixel 5,14,Google Chrome,157.0.8103.48,materialize,controlled_online,1,complete,100.483573,14448,15565716,636326,16216490,5,0,0,58,58,,,,,58,5,0,0
+R125,Pixel 5,14,Samsung Internet,30.0.5.27,materialize,controlled_online,1,complete,51.201448,7909,12018180,355169,12381258,4,0,0,56,56,,,,,56,4,0,0
+R126,Pixel 5,14,Google Drive,2.26.297.3.all.alldpi,materialize,controlled_online,1,partial,653.209641,1856670,79102846,5674224,86633740,60,34,0,93,93,59,34,0,0,0,60,34,0
+R127,Pixel 5,14,Notesnook,3.4.15,materialize,controlled_online,1,complete,592.972321,341758,66048909,4168655,70559322,45,0,0,44,44,44,0,0,0,0,45,0,0
+R128,Pixel 5,14,Notesnook,3.4.15,export,controlled_online,1,complete,29.523113,228890,883514,144602,1257006,2,0,0,1,1,1,0,0,0,0,1,0,0
+R129,Pixel 5,14,Telegram,12.9.2,materialize,controlled_online,1,complete,611.424575,26345245,390459032,6824569,423628846,38,0,0,174,174,39,0,0,0,135,38,0,0
+R130,Pixel 5,14,Notion,0.6.4304,materialize,controlled_online,1,complete,849.466543,434687,156582751,5913658,162931096,34,0,0,29,29,29,0,0,0,0,34,0,0
+R131,Pixel 5,14,Notion,0.6.4304,export,controlled_online,1,complete,177.750769,79089,5999737,831848,6910674,9,2,0,7,6,6,0,0,0,0,6,0,0
+R132,Pixel 5,14,WhatsApp,2.26.44.90,materialize,controlled_online,1,partial,199.820630,11745953,79196179,2232798,93174930,103,0,0,101,101,101,0,0,0,0,103,0,0
+R133,Pixel 5,14,WhatsApp,2.26.44.90,export,controlled_online,1,complete,140.038613,14428557,3345860,448256,18222673,4,0,0,3,3,3,0,0,0,0,4,0,0
+R134,Pixel 5,14,Google Chrome,157.0.8103.48,materialize,device_only,2,complete,101.572178,14567,15489042,630884,16134493,5,0,0,58,58,,,,,58,5,0,0
+R135,Pixel 5,14,Samsung Internet,30.0.5.27,materialize,device_only,2,complete,49.782048,8175,12639637,366933,13014745,4,0,0,56,56,,,,,56,4,0,0
+R136,Pixel 5,14,Google Drive,2.26.297.3.all.alldpi,materialize,device_only,2,complete,241.172724,36897,27504343,2109178,29650418,35,0,0,34,34,34,0,0,0,0,35,0,0
+R137,Pixel 5,14,Notesnook,3.4.15,materialize,device_only,2,complete,575.029424,341748,65567504,4131331,70040583,45,0,0,44,44,44,0,0,0,0,45,0,0
+R138,Pixel 5,14,Notesnook,3.4.15,export,device_only,2,complete,28.488951,228899,887598,141718,1258215,2,0,0,1,1,1,0,0,0,0,1,0,0
+R139,Pixel 5,14,Telegram,12.9.2,materialize,device_only,2,partial,606.458438,12981660,389936186,6820767,409738613,38,0,0,174,174,30,9,0,0,135,38,0,0
+R140,Pixel 5,14,Notion,0.6.4304,materialize,device_only,2,complete,79.786228,10109,1286472,256159,1552740,4,0,0,10,10,3,0,0,0,7,4,0,0
+R141,Pixel 5,14,WhatsApp,2.26.44.90,materialize,device_only,2,partial,206.636037,11745953,79002141,2218108,92966202,103,0,0,101,101,101,0,0,0,0,103,0,0
+R142,Pixel 5,14,WhatsApp,2.26.44.90,export,device_only,2,complete,126.506880,14428557,3322940,445206,18196703,4,0,0,3,3,3,0,0,0,0,4,0,0
+R143,Pixel 5,14,Google Chrome,157.0.8103.48,materialize,controlled_online,2,complete,100.656771,14567,15712297,636326,16363190,5,0,0,58,58,,,,,58,5,0,0
+R144,Pixel 5,14,Samsung Internet,30.0.5.27,materialize,controlled_online,2,complete,49.487782,8175,12759105,369882,13137162,4,0,0,56,56,,,,,56,4,0,0
+R145,Pixel 5,14,Google Drive,2.26.297.3.all.alldpi,materialize,controlled_online,2,partial,633.201395,1856670,79928917,5610235,87395822,60,34,0,93,93,59,34,0,0,0,60,34,0
+R146,Pixel 5,14,Notesnook,3.4.15,materialize,controlled_online,2,complete,573.860464,341740,66448074,4170164,70959978,45,0,0,44,44,44,0,0,0,0,45,0,0
+R147,Pixel 5,14,Notesnook,3.4.15,export,controlled_online,2,complete,28.201007,228890,887126,142927,1258943,2,0,0,1,1,1,0,0,0,0,1,0,0
+R148,Pixel 5,14,Telegram,12.9.2,materialize,controlled_online,2,complete,595.183651,26345378,393220482,6835936,426401796,38,0,0,174,174,39,0,0,0,135,38,0,0
+R149,Pixel 5,14,Notion,0.6.4304,materialize,controlled_online,2,complete,689.050671,408692,138578207,5359258,144346157,34,0,0,29,29,29,0,0,0,0,34,0,0
+R150,Pixel 5,14,Notion,0.6.4304,export,controlled_online,2,complete,223.733836,82391,7486553,1018257,8587201,11,3,0,7,7,7,0,0,0,0,7,0,0
+R151,Pixel 5,14,WhatsApp,2.26.44.90,materialize,controlled_online,2,partial,209.009142,11745957,79259503,2232807,93238267,103,0,0,101,101,101,0,0,0,0,103,0,0
+R152,Pixel 5,14,WhatsApp,2.26.44.90,export,controlled_online,2,complete,126.132711,14428557,3379957,448247,18256761,4,0,0,3,3,3,0,0,0,0,4,0,0
+R153,Pixel 5,14,Google Chrome,157.0.8103.48,materialize,device_only,3,complete,99.405843,14567,15494929,630884,16140380,5,0,0,58,58,,,,,58,5,0,0
+R154,Pixel 5,14,Samsung Internet,30.0.5.27,materialize,device_only,3,complete,51.885412,8174,12638400,366933,13013507,4,0,0,56,56,,,,,56,4,0,0
+R155,Pixel 5,14,Google Drive,2.26.297.3.all.alldpi,materialize,device_only,3,complete,240.380847,36897,27335301,2109178,29481376,35,0,0,34,34,34,0,0,0,0,35,0,0
+R156,Pixel 5,14,Notesnook,3.4.15,materialize,device_only,3,complete,566.409903,341749,65656606,4131332,70129687,45,0,0,44,44,44,0,0,0,0,45,0,0
+R157,Pixel 5,14,Notesnook,3.4.15,export,device_only,3,complete,27.668583,228899,886295,141718,1256912,2,0,0,1,1,1,0,0,0,0,1,0,0
+R158,Pixel 5,14,Telegram,12.9.2,materialize,device_only,3,partial,594.907552,12972623,391001367,6824179,410798169,38,0,0,174,174,30,9,0,0,135,38,0,0
+R159,Pixel 5,14,Notion,0.6.4304,materialize,device_only,3,complete,79.623683,10109,1282586,256159,1548854,4,0,0,10,10,3,0,0,0,7,4,0,0
+R160,Pixel 5,14,WhatsApp,2.26.44.90,materialize,device_only,3,partial,212.325149,11745979,79121192,2215032,93082203,103,0,0,101,101,101,0,0,0,0,103,0,0
+R161,Pixel 5,14,WhatsApp,2.26.44.90,export,device_only,3,complete,127.639482,14428557,3294260,445218,18168035,4,0,0,3,3,3,0,0,0,0,4,0,0
+R162,Pixel 5,14,Google Chrome,157.0.8103.48,materialize,controlled_online,3,complete,98.410256,14567,15791881,636326,16442774,5,0,0,58,58,,,,,58,5,0,0
+R163,Pixel 5,14,Samsung Internet,30.0.5.27,materialize,controlled_online,3,complete,51.123796,8174,12735303,369882,13113359,4,0,0,56,56,,,,,56,4,0,0
+R164,Pixel 5,14,Google Drive,2.26.297.3.all.alldpi,materialize,controlled_online,3,partial,636.599543,1856670,79641403,5610327,87108400,60,34,0,93,93,59,34,0,0,0,60,34,0
+R165,Pixel 5,14,Notesnook,3.4.15,materialize,controlled_online,3,complete,576.144760,341740,66271337,4170164,70783241,45,0,0,44,44,44,0,0,0,0,45,0,0
+R166,Pixel 5,14,Notesnook,3.4.15,export,controlled_online,3,complete,28.776791,228890,886886,144398,1260174,2,0,0,1,1,1,0,0,0,0,1,0,0
+R167,Pixel 5,14,Telegram,12.9.2,materialize,controlled_online,3,complete,596.373989,26349734,391612989,6827991,424790714,38,0,0,174,174,39,0,0,0,135,38,0,0
+R168,Pixel 5,14,Notion,0.6.4304,materialize,controlled_online,3,partial,647.631314,394408,132420118,5209889,138024415,6,25,1,29,28,5,22,0,1,0,6,25,1
+R169,Pixel 5,14,Notion,0.6.4304,export,controlled_online,3,complete,220.534296,82391,7525427,1018260,8626078,11,3,0,7,7,7,0,0,0,0,7,0,0
+R170,Pixel 5,14,WhatsApp,2.26.44.90,materialize,controlled_online,3,partial,208.192342,11745989,79108473,2232847,93087309,103,0,0,101,101,101,0,0,0,0,103,0,0
+R171,Pixel 5,14,WhatsApp,2.26.44.90,export,controlled_online,3,complete,126.682146,14428557,3296763,448258,18173578,4,0,0,3,3,3,0,0,0,0,4,0,0
+R172,P30 Lite,9,Google Chrome,138.0.7204.179,materialize,device_only,1,complete,111.806848,16042,15445542,731925,16193509,5,0,0,58,58,,,,,58,5,0,0
+R173,P30 Lite,9,Samsung Internet,28.0.5.9,materialize,device_only,1,complete,76.255196,10310,14021219,423441,14454970,4,0,0,56,56,,,,,56,4,0,0
+R174,P30 Lite,9,Google Drive,2.26.447.1.all.alldpi,materialize,device_only,1,complete,356.261587,36879,29570300,2132036,31739215,35,0,0,34,34,34,0,0,0,0,35,0,0
+R175,P30 Lite,9,Notesnook,3.4.15,materialize,device_only,1,complete,627.320270,343260,64466158,4256209,69065627,45,0,0,44,44,44,0,0,0,0,45,0,0
+R176,P30 Lite,9,Notesnook,3.4.15,export,device_only,1,complete,34.271883,225169,856713,151858,1233740,2,0,0,1,1,1,0,0,0,0,1,0,0
+R177,P30 Lite,9,Telegram,13.2.2,materialize,device_only,1,partial,872.898101,33637025,457597038,8169984,499404047,41,0,0,174,174,30,9,0,0,135,41,0,0
+R178,P30 Lite,9,Notion,0.6.4304,materialize,device_only,1,complete,86.038365,10088,1299649,256074,1565811,4,0,0,10,10,3,0,0,0,7,4,0,0
+R179,P30 Lite,9,WhatsApp,2.26.44.90,materialize,device_only,1,partial,203.531975,11747643,80552585,2221907,94522135,103,0,0,101,101,101,0,0,0,0,103,0,0
+R180,P30 Lite,9,WhatsApp,2.26.44.90,export,device_only,1,complete,182.495326,14428541,3991124,452500,18872165,4,0,0,3,3,3,0,0,0,0,4,0,0
+R181,P30 Lite,9,Google Chrome,138.0.7204.179,materialize,controlled_online,1,complete,113.357756,16042,15801731,738309,16556082,5,0,0,58,58,,,,,58,5,0,0
+R182,P30 Lite,9,Samsung Internet,28.0.5.9,materialize,controlled_online,1,complete,77.848916,10314,14057308,426951,14494573,4,0,0,56,56,,,,,56,4,0,0
+R183,P30 Lite,9,Google Drive,2.26.447.1.all.alldpi,materialize,controlled_online,1,complete,899.587657,1857284,75901417,5092395,82851096,94,0,0,93,93,93,0,0,0,0,94,0,0
+R184,P30 Lite,9,Notesnook,3.4.15,materialize,controlled_online,1,complete,653.722486,340978,64360928,4305227,69007133,45,0,0,44,44,44,0,0,0,0,45,0,0
+R185,P30 Lite,9,Notesnook,3.4.15,export,controlled_online,1,complete,35.865935,225161,865915,154724,1245800,2,0,0,1,1,1,0,0,0,0,1,0,0
+R186,P30 Lite,9,Telegram,13.2.2,materialize,controlled_online,1,partial,869.546506,33639372,462924613,8264423,504828408,41,0,0,174,174,30,9,0,0,135,41,0,0
+R187,P30 Lite,9,Notion,0.6.4304,materialize,controlled_online,1,complete,1410.870699,450132,165813886,6269161,172533179,34,0,0,29,29,29,0,0,0,0,34,0,0
+R188,P30 Lite,9,Notion,0.6.4304,export,controlled_online,1,complete,265.194045,82382,8230526,1043159,9356067,11,3,0,7,7,7,0,0,0,0,7,0,0
+R189,P30 Lite,9,WhatsApp,2.26.44.90,materialize,controlled_online,1,partial,211.886508,11747760,81055250,2236962,95039972,103,0,0,101,101,101,0,0,0,0,103,0,0
+R190,P30 Lite,9,WhatsApp,2.26.44.90,export,controlled_online,1,complete,164.308322,14428541,4202373,455721,19086635,4,0,0,3,3,3,0,0,0,0,4,0,0
+R191,P30 Lite,9,Google Chrome,138.0.7204.179,materialize,device_only,2,complete,117.753905,15985,15583938,731925,16331848,5,0,0,58,58,,,,,58,5,0,0
+R192,P30 Lite,9,Samsung Internet,28.0.5.9,materialize,device_only,2,complete,78.903308,10310,13983560,423441,14417311,4,0,0,56,56,,,,,56,4,0,0
+R193,P30 Lite,9,Google Drive,2.26.447.1.all.alldpi,materialize,device_only,2,complete,373.126846,36879,29836227,2106483,31979589,35,0,0,34,34,34,0,0,0,0,35,0,0
+R194,P30 Lite,9,Notesnook,3.4.15,materialize,device_only,2,complete,642.234070,341418,63815766,4151485,68308669,45,0,0,44,44,44,0,0,0,0,45,0,0
+R195,P30 Lite,9,Notesnook,3.4.15,export,device_only,2,complete,36.412461,225170,863412,151859,1240441,2,0,0,1,1,1,0,0,0,0,1,0,0
+R196,P30 Lite,9,Telegram,13.2.2,materialize,device_only,2,complete,909.056413,33624570,453970989,7926004,495521563,40,0,0,174,174,39,0,0,0,135,40,0,0
+R197,P30 Lite,9,Notion,0.6.4304,materialize,device_only,2,complete,91.037784,10109,1405813,256072,1671994,4,0,0,10,10,3,0,0,0,7,4,0,0
+R198,P30 Lite,9,WhatsApp,2.26.44.90,materialize,device_only,2,partial,215.213464,11747742,82206279,2235308,96189329,103,0,0,101,101,101,0,0,0,0,103,0,0
+R199,P30 Lite,9,WhatsApp,2.26.44.90,export,device_only,2,complete,181.164836,14428541,3931843,452515,18812899,4,0,0,3,3,3,0,0,0,0,4,0,0
+R200,P30 Lite,9,Google Chrome,138.0.7204.179,materialize,controlled_online,2,complete,120.631535,15985,15818194,738309,16572488,5,0,0,58,58,,,,,58,5,0,0
+R201,P30 Lite,9,Samsung Internet,28.0.5.9,materialize,controlled_online,2,complete,80.271065,10314,14110737,426951,14548002,4,0,0,56,56,,,,,56,4,0,0
+R202,P30 Lite,9,Google Drive,2.26.447.1.all.alldpi,materialize,controlled_online,2,complete,926.453475,1856896,76159098,5085539,83101533,94,0,0,93,93,93,0,0,0,0,94,0,0
+R203,P30 Lite,9,Notesnook,3.4.15,materialize,controlled_online,2,complete,689.327029,341640,65152432,4246547,69740619,45,0,0,44,44,44,0,0,0,0,45,0,0
+R204,P30 Lite,9,Notesnook,3.4.15,export,controlled_online,2,complete,39.021348,225166,862504,154729,1242399,2,0,0,1,1,1,0,0,0,0,1,0,0
+R205,P30 Lite,9,Telegram,13.2.2,materialize,controlled_online,2,complete,893.144632,33620317,450625328,7929014,492174659,40,0,0,174,174,39,0,0,0,135,40,0,0
+R206,P30 Lite,9,Notion,0.6.4304,materialize,controlled_online,2,complete,1423.762416,449501,166106932,6269166,172825599,34,0,0,29,29,29,0,0,0,0,34,0,0
+R207,P30 Lite,9,Notion,0.6.4304,export,controlled_online,2,complete,270.543651,82382,8215851,1043840,9342073,11,3,0,7,7,7,0,0,0,0,7,0,0
+R208,P30 Lite,9,WhatsApp,2.26.44.90,materialize,controlled_online,2,partial,218.822093,11747751,80867424,2236974,94852149,103,0,0,101,101,101,0,0,0,0,103,0,0
+R209,P30 Lite,9,WhatsApp,2.26.44.90,export,controlled_online,2,complete,163.182744,14428541,4209019,455743,19093303,4,0,0,3,3,3,0,0,0,0,4,0,0
+R210,P30 Lite,9,Google Chrome,138.0.7204.179,materialize,device_only,3,complete,120.249775,15985,15541961,731925,16289871,5,0,0,58,58,,,,,58,5,0,0
+R211,P30 Lite,9,Samsung Internet,28.0.5.9,materialize,device_only,3,complete,78.332207,10310,14006891,423441,14440642,4,0,0,56,56,,,,,56,4,0,0
+R212,P30 Lite,9,Google Drive,2.26.447.1.all.alldpi,materialize,device_only,3,complete,370.819902,36879,29842171,2106483,31985533,35,0,0,34,34,34,0,0,0,0,35,0,0
+R213,P30 Lite,9,Notesnook,3.4.15,materialize,device_only,3,complete,653.459856,342490,65085054,4167783,69595327,45,0,0,44,44,44,0,0,0,0,45,0,0
+R214,P30 Lite,9,Notesnook,3.4.15,export,device_only,3,complete,36.755976,225169,861505,151858,1238532,2,0,0,1,1,1,0,0,0,0,1,0,0
+R215,P30 Lite,9,Telegram,13.2.2,materialize,device_only,3,complete,915.596223,33626200,452888315,7918005,494432520,40,0,0,174,174,39,0,0,0,135,40,0,0
+R216,P30 Lite,9,Notion,0.6.4304,materialize,device_only,3,complete,90.059064,10109,1406941,256072,1673122,4,0,0,10,10,3,0,0,0,7,4,0,0
+R217,P30 Lite,9,WhatsApp,2.26.44.90,materialize,device_only,3,partial,211.137826,11747760,80655962,2215691,94619413,103,0,0,101,101,101,0,0,0,0,103,0,0
+R218,P30 Lite,9,WhatsApp,2.26.44.90,export,device_only,3,complete,184.683335,14428541,3933230,452493,18814264,4,0,0,3,3,3,0,0,0,0,4,0,0
+R219,P30 Lite,9,Google Chrome,138.0.7204.179,materialize,controlled_online,3,complete,125.460086,16042,15781222,738309,16535573,5,0,0,58,58,,,,,58,5,0,0
+R220,P30 Lite,9,Samsung Internet,28.0.5.9,materialize,controlled_online,3,complete,81.489509,10314,14158273,426951,14595538,4,0,0,56,56,,,,,56,4,0,0
+R221,P30 Lite,9,Google Drive,2.26.447.1.all.alldpi,materialize,controlled_online,3,complete,935.208506,1856896,75760022,5072084,82689002,94,0,0,93,93,93,0,0,0,0,94,0,0
+R222,P30 Lite,9,Notesnook,3.4.15,materialize,controlled_online,3,complete,703.626926,341814,64582910,4246535,69171259,45,0,0,44,44,44,0,0,0,0,45,0,0
+R223,P30 Lite,9,Notesnook,3.4.15,export,controlled_online,3,complete,39.311376,225171,872076,154734,1251981,2,0,0,1,1,1,0,0,0,0,1,0,0
+R224,P30 Lite,9,Telegram,13.2.2,materialize,controlled_online,3,complete,908.629002,33620436,452902192,7951311,494473939,40,0,0,174,174,39,0,0,0,135,40,0,0
+R225,P30 Lite,9,Notion,0.6.4304,materialize,controlled_online,3,complete,1439.747933,449501,166101383,6283138,172834022,34,0,0,29,29,29,0,0,0,0,34,0,0
+R226,P30 Lite,9,Notion,0.6.4304,export,controlled_online,3,complete,269.916041,82382,8241170,1035638,9359190,11,3,0,7,7,7,0,0,0,0,7,0,0
+R227,P30 Lite,9,WhatsApp,2.26.44.90,materialize,controlled_online,3,partial,226.930926,11747742,80907047,2236975,94891764,103,0,0,101,101,101,0,0,0,0,103,0,0
+R228,P30 Lite,9,WhatsApp,2.26.44.90,export,controlled_online,3,complete,166.273354,14428541,4207490,455743,19091774,4,0,0,3,3,3,0,0,0,0,4,0,0

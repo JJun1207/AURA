@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="224" viewBox="0 0 1080 224" role="img" aria-labelledby="title desc">
+  <title id="title">AURA</title>
+  <desc id="desc">A highlighted row on a phone screen is linked to a file and an acquisition record.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2=".24" gradientUnits="objectBoundingBox">
+      <stop stop-color="#101e2b"/>
+      <stop offset=".56" stop-color="#133442"/>
+      <stop offset="1" stop-color="#105052"/>
+    </linearGradient>
+    <linearGradient id="letters" x2="1" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#fcfcf4"/>
+      <stop offset="1" stop-color="#c6f2e1"/>
+    </linearGradient>
+    <pattern id="dots" width="16" height="16" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#8dd6c4" opacity=".22"/>
+    </pattern>
+    <clipPath id="canvas"><rect width="1080" height="224" rx="16"/></clipPath>
+  </defs>
+  <g clip-path="url(#canvas)">
+    <rect width="1080" height="224" fill="url(#background)"/>
+    <rect x="522" width="558" height="224" fill="url(#dots)"/>
+    <g fill="none" stroke="#7bcfbb" opacity=".23">
+      <path d="M348 245C494 196 477 10 635-35"/>
+      <path d="M365 245C515 197 499 11 655-35"/>
+      <path d="M383 245C536 199 521 12 676-35"/>
+      <path d="M402 245C556 200 544 13 698-35"/>
+      <path d="M422 245C579 202 567 14 721-35"/>
+      <path d="M443 245C601 204 591 15 745-35"/>
+      <path d="M465 245C624 206 615 16 770-35"/>
+    </g>
+    <!-- A custom wordmark keeps the heading legible at small widths. -->
+    <g transform="translate(48 71)" fill="url(#letters)" fill-rule="evenodd">
+      <path d="M0 82 32 0h19l32 82H64l-6-17H24l-6 17Zm30-32h22L41 19Z"/>
+      <path d="M93 0h18v48c0 13 6 20 18 20s18-7 18-20V0h18v49c0 23-13 35-36 35S93 72 93 49Z"/>
+      <path d="M185 82V0h37c20 0 31 10 31 27 0 13-6 22-18 26l23 29h-22l-19-26h-14v26Zm18-66v25h17c10 0 15-4 15-13 0-8-5-12-15-12Z"/>
+      <path d="m270 82 32-82h19l32 82h-19l-6-17h-34l-6 17Zm30-32h22l-11-31Z"/>
+    </g>
+    <!-- The selected item connects to both its file and its review record. -->
+    <g stroke-linecap="round" stroke-linejoin="round">
+      <rect x="667" y="22" width="115" height="181" rx="18" fill="#102e38" stroke="#b4e7d7" stroke-width="2.5"/>
+      <path d="M709 34h31" stroke="#82bcb3" stroke-width="3"/>
+      <g stroke="#719e9d" stroke-width="2" fill="none">
+        <path d="M683 56h55"/>
+        <rect x="682" y="70" width="11" height="11" rx="3"/>
+        <path d="M701 74h50m-50 6h30"/>
+        <rect x="682" y="137" width="11" height="11" rx="3"/>
+        <path d="M701 141h50m-50 6h30"/>
+        <path d="M709 189h31"/>
+      </g>
+      <rect x="678" y="94" width="94" height="29" rx="5" fill="#23564f" stroke="#a5edc9" stroke-width="1.7"/>
+      <rect x="684" y="103" width="10" height="10" rx="2" fill="#a5edc9"/>
+      <path d="M702 105h46m-46 7h27" stroke="#b5e7cf" stroke-width="2.4"/>
+      <path d="M773 108h46q10 0 16-9l17-26q6-9 16-9h25m-76 44q12 0 18 9l17 27q6 9 16 9h25" fill="none" stroke="#94e2c3" stroke-width="2.5"/>
+      <circle cx="776" cy="108" r="4" fill="#d0f3de"/>
+      <circle cx="818" cy="108" r="4" fill="#d0f3de"/>
+      <g fill="#122f39" stroke="#98d9c1" stroke-width="1.8">
+        <rect x="893" y="38" width="96" height="51" rx="9"/>
+        <rect x="893" y="128" width="96" height="51" rx="9"/>
+      </g>
+      <g fill="none" stroke-width="2">
+        <path d="M910 52h13l7 7v17h-20Zm13 0v8h7" stroke="#d7eddc"/>
+        <path d="M942 60h29m-29 8h20" stroke="#84b6a9"/>
+        <path d="M911 143h18v21h-18Zm4 6h10m-10 5h10m-10 5h6" stroke="#e8c580"/>
+        <path d="M942 150h29m-29 8h20" stroke="#84b6a9"/>
+      </g>
+    </g>
+  </g>
+</svg>
