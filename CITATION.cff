@@ -5,7 +5,7 @@ title: "AURA"
 authors:
   - family-names: "Kim"
     given-names: "Junki"
-version: "0.1.0"
+version: "0.2.0"
 repository-code: "https://github.com/JJun1207/AURA"
 url: "https://github.com/JJun1207/AURA"
 license: Apache-2.0
