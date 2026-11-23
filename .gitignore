@@ -7,3 +7,8 @@ __pycache__/
 build/
 dist/
 .DS_Store
+.venv-win/
+/experiment-runs/
+/session-config*.json
+/authorization.json
+/dataset-logs/
